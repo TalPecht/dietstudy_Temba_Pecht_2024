@@ -1,0 +1,1075 @@
+---
+title: "Figure 2 - Sysmex analysis"
+author: "TP"
+date: "2024-11-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1. preperation
+## load packages
+```{r}
+library(variancePartition)
+library(ggplot2)
+library(dplyr)
+library(ggpubr)
+library(openxlsx)
+library(naniar)
+library(rstatix)
+library(patchwork)
+library(ggsci)
+library(RColorBrewer)
+library(tidyverse)
+library(ggrepel)
+```
+## colors 
+```{r}
+# col_timepoint
+col_timepoint<- brewer.pal(n = 3, name = "Dark2")
+names(col_timepoint)<-c("t0", "t1", "t2")
+
+col_diet_diet <- c("#0564ad", "#b91c1c", "#f1c232")
+names(col_diet_diet) <- c("rural_diet", "urban_diet", "MBEGE")
+```
+
+
+# ---------------------------
+
+# 2. load data
+## sysmex table
+```{r}
+sysmex <- read.csv("./241118_sysmex_df.csv", row.names = 1)
+head(sysmex)
+```
+
+## sample_table
+```{r}
+sample_table <- read.csv("./241118_sample_table_sysmex.csv", row.names = 1)
+head(sample_table)
+```
+
+
+
+
+
+## factor parameters
+```{r}
+sample_table$diet <- factor(sample_table$diet, levels = c("MBEGE","rural_diet","urban_diet","controls_u", "controls_r"))
+
+sample_table$timepoint <- factor(sample_table$timepoint, levels = c("t0","t1","t2"))
+```
+
+
+
+```{r}
+identical(rownames(sysmex), rownames(sample_table))
+```
+
+
+
+
+
+are all the sysmex IDs present in the sample table
+```{r}
+all(rownames(sysmex) %in% sample_table$ID)
+```
+
+
+# ===============================
+
+
+# Samples available for analysis
+
+```{r}
+table(sample_table$diet, sample_table$timepoint)
+```
+
+
+# ==============================
+
+### 1. Urban diet
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+order_variables <- c("WBC", "NEUT_A", "IG_A", "IG_P","NEUT_GI","NEUT_RI","MONO_A","RE_MONO_A","RE_Mono_P", "RE_MONO_PM", "RE_LYMP_A","RE_LYMP_P_L", "BASO_P")
+
+```
+
+
+## *Dream* : Urban diet
+### prepare data
+### ... info table
+```{r}
+info_urbandiet_diet <- subset(sample_table, diet == "urban_diet")
+rownames(info_urbandiet_diet) <- info_urbandiet_diet$ID
+
+table(info_urbandiet_diet$diet, info_urbandiet_diet$timepoint)
+```
+### ... sysmex table
+```{r}
+sysmex_urbandiet_diet_infl <- sysmex[match(rownames(info_urbandiet_diet), rownames(sysmex)),]
+
+vis_miss(sysmex_urbandiet_diet_infl)
+```
+### ... log transform
+```{r}
+sysmex_urbandiet_diet_infl_log <- apply(sysmex_urbandiet_diet_infl,2, function(x){
+  log2(x + 0.01)
+})
+
+sysmex_urbandiet_diet_infl_log <- as.data.frame(sysmex_urbandiet_diet_infl_log)
+
+head(sysmex_urbandiet_diet_infl_log)
+```
+
+```{r}
+analysis_cols <- c("WBC", "NEUT_A", "IG_A", "IG_P","NEUT_GI","NEUT_RI","MONO_A","RE_MONO_A","RE_Mono_P", "RE_MONO_PM", "RE_LYMP_A","RE_LYMP_P_L", "BASO_P")
+
+sysmex_urbandiet_diet_infl_log <- sysmex_urbandiet_diet_infl_log[,analysis_cols]
+
+vis_miss(sysmex_urbandiet_diet_infl_log)
+```
+
+```{r}
+identical(rownames(sysmex_urbandiet_diet_infl_log), rownames(info_urbandiet_diet))
+```
+
+```{r}
+## factor timepoints
+info_urbandiet_diet$timepoint <- factor(info_urbandiet_diet$timepoint, levels = c("t0","t1","t2"))
+
+unique(info_urbandiet_diet$timepoint )
+```
+```{r}
+colnames(info_urbandiet_diet)
+```
+
+```{r}
+L <- makeContrastsDream(~ 0 + timepoint + Age + BMI_t0 + activity_sum_rank_scaled + (1|PID) , info_urbandiet_diet,
+  contrasts = c(
+    t0_vs_t1 = "timepointt0 - timepointt1",
+    t0_vs_t2 = "timepointt0 - timepointt2",
+    t1_vs_t2 = "timepointt1 - timepointt2"
+  )
+)
+
+# Visualize contrast matrix
+plotContrasts(L)
+```
+```{r}
+fitmm_urbandiet_diet <- dream(t(sysmex_urbandiet_diet_infl_log), ~ 0 + timepoint + Age + BMI_t0 + activity_sum_rank_scaled + (1|PID)  , info_urbandiet_diet, L, ddf = "Kenward-Roger", useWeights = FALSE)
+
+fitmm_urbandiet_diet <- eBayes(fitmm_urbandiet_diet)
+```
+
+```{r}
+# Examine design matrix
+head(fitmm_urbandiet_diet$design, 3)
+```
+
+```{r}
+colnames(fitmm_urbandiet_diet)
+
+```
+
+```{r}
+## create a list of results
+dream_urbandiet_diet <- data.frame() # create empty dataframe for storage
+
+for(i in  colnames(L)){
+  print(i)
+  
+  tmpi <- variancePartition::topTable(fitmm_urbandiet_diet, coef = i, number = Inf, adjust.method = "BH", sort.by = "p", lfc = 0)
+  
+  tmpi$comparison <- i
+  
+  tmpi$variable <- rownames(tmpi)
+  
+  tmpi <- as.data.frame(tmpi %>% add_significance(p.col = "adj.P.Val"))
+  
+  dream_urbandiet_diet <- rbind(dream_urbandiet_diet, tmpi)
+  
+}
+
+head(dream_urbandiet_diet)
+```
+#### ... add paired log2FC
+```{r}
+identical(rownames(info_urbandiet_diet), rownames(sysmex_urbandiet_diet_infl_log))
+```
+
+```{r}
+pairedFC_urbandiet_diet <- data.frame()
+
+for ( i in colnames(L)){
+  print(i)
+  
+  ctr_condition = str_split_fixed(i, "_vs_",2)[,1]
+  test_condition = str_split_fixed(i, "_vs_",2)[,2]
+  
+  print(ctr_condition)
+  print(test_condition)
+  
+  ctrids <- rownames(subset(info_urbandiet_diet, as.character(timepoint) == ctr_condition))
+  testids <- rownames(subset(info_urbandiet_diet, as.character(timepoint) == test_condition))
+
+  tmpfc <- fcros::fcrosFCmat(t(sysmex_urbandiet_diet_infl_log), ctrids, testids, log2.opt = 0)
+
+  tmp_pairedFC <- data.frame(variable = tmpfc$idnames, 
+                                       FC = as.numeric(tmpfc$FC), 
+                                       FC2 = as.numeric(tmpfc$FC2))
+
+  tmp_pairedFC$log2FC <- log2(tmp_pairedFC$FC)
+  tmp_pairedFC$log2FC2 <- log2(tmp_pairedFC$FC2)
+
+  tmp_pairedFC$direction <- ifelse(tmp_pairedFC$log2FC2>0,"up",  "down")
+
+  tmp_pairedFC$comparison <- i
+  
+  pairedFC_urbandiet_diet <- rbind(pairedFC_urbandiet_diet, tmp_pairedFC)
+  
+}
+
+head(pairedFC_urbandiet_diet)
+```
+
+```{r}
+### add paired FC
+pairedFC_urbandiet_diet$merged <- paste0(pairedFC_urbandiet_diet$variable,"_", pairedFC_urbandiet_diet$comparison)
+
+dream_urbandiet_diet$merged <- paste0(dream_urbandiet_diet$variable,"_", dream_urbandiet_diet$comparison)
+
+cols_2_add <- c("FC","FC2","log2FC","log2FC2","direction","merged")
+
+dream_urbandiet_diet <- merge(dream_urbandiet_diet, pairedFC_urbandiet_diet[,cols_2_add], by = "merged")
+
+dream_urbandiet_diet$regulation <- ifelse(dream_urbandiet_diet$adj.P.Val.signif != "ns", 
+                                         dream_urbandiet_diet$direction, "ns")
+
+rownames(dream_urbandiet_diet) <- dream_urbandiet_diet$merged
+
+head(dream_urbandiet_diet)
+```
+
+```{r}
+list_sig_dream_urbandiet_diet <- list()
+
+for(i in unique(dream_urbandiet_diet$comparison)){
+  
+  print(i)
+  
+  list_sig_dream_urbandiet_diet[[i]] <- split(
+    subset(dream_urbandiet_diet, adj.P.Val.signif != "ns" & comparison == i)$variable,
+     subset(dream_urbandiet_diet, adj.P.Val.signif != "ns" & comparison == i)$regulation
+    )
+  
+}
+
+str(list_sig_dream_urbandiet_diet)
+```
+```{r}
+list_sig_dream_urbandiet_diet
+```
+
+
+# -----------------------
+
+## *Dream* : Urban diet controls
+### prepare data
+### ... info table
+```{r}
+info_urbandiet_ctr <- subset(sample_table, diet == "controls_r")
+rownames(info_urbandiet_ctr) <- info_urbandiet_ctr$ID
+
+table(info_urbandiet_ctr$diet, info_urbandiet_ctr$timepoint)
+```
+### ... sysmex table
+```{r}
+sysmex_urbandiet_ctr_infl <- sysmex[match(rownames(info_urbandiet_ctr), rownames(sysmex)),]
+
+vis_miss(sysmex_urbandiet_ctr_infl)
+```
+### ... log transform
+```{r}
+sysmex_urbandiet_ctr_infl_log <- apply(sysmex_urbandiet_ctr_infl, 2, function(x){
+  log2(x + 0.01)
+})
+
+sysmex_urbandiet_ctr_infl_log <- as.data.frame(sysmex_urbandiet_ctr_infl_log)
+
+head(sysmex_urbandiet_ctr_infl_log)
+```
+
+
+```{r}
+analysis_cols <- c("WBC", "NEUT_A", "IG_A", "IG_P","NEUT_GI","NEUT_RI","MONO_A","RE_MONO_A","RE_Mono_P", "RE_MONO_PM", "RE_LYMP_A","RE_LYMP_P_L", "BASO_P")
+
+sysmex_urbandiet_ctr_infl_log <- sysmex_urbandiet_ctr_infl_log[,analysis_cols]
+
+vis_miss(sysmex_urbandiet_ctr_infl_log)
+```
+
+```{r}
+identical(rownames(sysmex_urbandiet_ctr_infl_log), rownames(info_urbandiet_ctr))
+```
+
+```{r}
+## factor timepoints
+info_urbandiet_ctr$timepoint <- factor(info_urbandiet_ctr$timepoint, levels = c("t0","t1","t2"))
+
+unique(info_urbandiet_ctr$timepoint )
+```
+```{r}
+colnames(info_urbandiet_ctr)
+```
+
+```{r}
+L <- makeContrastsDream(~ 0 + timepoint + Age + BMI_t0 + activity_sum_rank_scaled + (1|PID) , info_urbandiet_ctr,
+  contrasts = c(
+    t0_vs_t1 = "timepointt0 - timepointt1",
+    t0_vs_t2 = "timepointt0 - timepointt2",
+    t1_vs_t2 = "timepointt1 - timepointt2"
+  )
+)
+
+# Visualize contrast matrix
+plotContrasts(L)
+```
+```{r}
+fitmm_urbandiet_ctr <- dream(t(sysmex_urbandiet_ctr_infl_log), ~ 0 + timepoint + Age + BMI_t0 + activity_sum_rank_scaled + (1|PID)  , info_urbandiet_ctr, L, ddf = "Kenward-Roger", useWeights = FALSE)
+
+fitmm_urbandiet_ctr <- eBayes(fitmm_urbandiet_ctr)
+```
+
+```{r}
+# Examine design matrix
+head(fitmm_urbandiet_ctr$design, 3)
+```
+
+```{r}
+colnames(fitmm_urbandiet_ctr)
+
+```
+
+```{r}
+## create a list of results
+dream_urbandiet_ctr <- data.frame() # create empty dataframe for storage
+
+for(i in  colnames(L)){
+  print(i)
+  
+  tmpi <- variancePartition::topTable(fitmm_urbandiet_ctr, coef = i, number = Inf, adjust.method = "BH", sort.by = "p", lfc = 0)
+  
+  tmpi$comparison <- i
+  
+  tmpi$variable <- rownames(tmpi)
+  
+  tmpi <- as.data.frame(tmpi %>% add_significance(p.col = "adj.P.Val"))
+  
+  dream_urbandiet_ctr <- rbind(dream_urbandiet_ctr, tmpi)
+  
+}
+
+head(dream_urbandiet_ctr)
+```
+#### ... add paired log2FC
+```{r}
+identical(rownames(info_urbandiet_ctr), rownames(sysmex_urbandiet_ctr_infl_log))
+```
+
+```{r}
+pairedFC_urbandiet_ctr <- data.frame()
+
+for ( i in colnames(L)){
+  print(i)
+  
+  ctr_condition = str_split_fixed(i, "_vs_",2)[,1]
+  test_condition = str_split_fixed(i, "_vs_",2)[,2]
+  
+  print(ctr_condition)
+  print(test_condition)
+  
+  ctrids <- rownames(subset(info_urbandiet_ctr, as.character(timepoint) == ctr_condition))
+  testids <- rownames(subset(info_urbandiet_ctr, as.character(timepoint) == test_condition))
+
+  tmpfc <- fcros::fcrosFCmat(t(sysmex_urbandiet_ctr_infl_log), ctrids, testids, log2.opt = 0)
+
+  tmp_pairedFC <- data.frame(variable = tmpfc$idnames, 
+                                       FC = as.numeric(tmpfc$FC), 
+                                       FC2 = as.numeric(tmpfc$FC2))
+
+  tmp_pairedFC$log2FC <- log2(tmp_pairedFC$FC)
+  tmp_pairedFC$log2FC2 <- log2(tmp_pairedFC$FC2)
+
+  tmp_pairedFC$direction <- ifelse(tmp_pairedFC$log2FC2>0,"up",  "down")
+
+  tmp_pairedFC$comparison <- i
+  
+  pairedFC_urbandiet_ctr <- rbind(pairedFC_urbandiet_ctr, tmp_pairedFC)
+  
+}
+
+head(pairedFC_urbandiet_ctr)
+```
+
+```{r}
+### add paired FC
+pairedFC_urbandiet_ctr$merged <- paste0(pairedFC_urbandiet_ctr$variable,"_", pairedFC_urbandiet_ctr$comparison)
+
+dream_urbandiet_ctr$merged <- paste0(dream_urbandiet_ctr$variable,"_", dream_urbandiet_ctr$comparison)
+
+cols_2_add <- c("FC","FC2","log2FC","log2FC2","direction","merged")
+
+dream_urbandiet_ctr <- merge(dream_urbandiet_ctr, pairedFC_urbandiet_ctr[,cols_2_add], by = "merged")
+
+dream_urbandiet_ctr$regulation <- ifelse(dream_urbandiet_ctr$adj.P.Val.signif != "ns", 
+                                         dream_urbandiet_ctr$direction, "ns")
+
+rownames(dream_urbandiet_ctr) <- dream_urbandiet_ctr$merged
+
+head(dream_urbandiet_ctr)
+```
+
+```{r}
+list_sig_dream_urbandiet_ctr <- list()
+
+for(i in unique(dream_urbandiet_ctr$comparison)){
+  
+  print(i)
+  
+  list_sig_dream_urbandiet_ctr[[i]] <- split(
+    subset(dream_urbandiet_ctr, adj.P.Val.signif != "ns" & comparison == i)$variable,
+     subset(dream_urbandiet_ctr, adj.P.Val.signif != "ns" & comparison == i)$regulation
+    )
+  
+}
+
+str(list_sig_dream_urbandiet_ctr)
+```
+```{r}
+list_sig_dream_urbandiet_ctr
+```
+
+
+# ==============================
+
+### 2. Rural diet
+
+## *Dream* : Rural diet
+### prepare data
+### ... info table
+```{r}
+info_ruraldiet_diet <- subset(sample_table, diet == "rural_diet")
+rownames(info_ruraldiet_diet) <- info_ruraldiet_diet$ID
+
+table(info_ruraldiet_diet$diet, info_ruraldiet_diet$timepoint)
+```
+
+### ... sysmex table
+```{r}
+sysmex_ruraldiet_diet_infl <- sysmex[match(rownames(info_ruraldiet_diet), rownames(sysmex)),]
+
+vis_miss(sysmex_ruraldiet_diet_infl)
+```
+
+### ... log transform
+```{r}
+sysmex_ruraldiet_diet_infl_log <- apply(sysmex_ruraldiet_diet_infl, 2, function(x){
+  log2(x + 0.01)
+})
+
+sysmex_ruraldiet_diet_infl_log <- as.data.frame(sysmex_ruraldiet_diet_infl_log)
+
+head(sysmex_ruraldiet_diet_infl_log)
+```
+
+
+```{r}
+analysis_cols <- c("WBC", "NEUT_A", "IG_A", "IG_P","NEUT_GI","NEUT_RI","MONO_A","RE_MONO_A","RE_Mono_P", "RE_MONO_PM", "RE_LYMP_A","RE_LYMP_P_L", "BASO_P")
+
+sysmex_ruraldiet_diet_infl_log <- sysmex_ruraldiet_diet_infl_log[,analysis_cols]
+
+vis_miss(sysmex_ruraldiet_diet_infl_log)
+```
+
+```{r}
+identical(rownames(sysmex_ruraldiet_diet_infl_log), rownames(info_ruraldiet_diet))
+```
+
+```{r}
+## factor timepoints
+info_ruraldiet_diet$timepoint <- factor(info_ruraldiet_diet$timepoint, levels = c("t0","t1","t2"))
+
+unique(info_ruraldiet_diet$timepoint )
+```
+```{r}
+colnames(info_ruraldiet_diet)
+```
+
+```{r}
+L <- makeContrastsDream(~ 0 + timepoint + Age + BMI_t0 + activity_sum_rank_scaled + (1|PID) , info_ruraldiet_diet,
+  contrasts = c(
+    t0_vs_t1 = "timepointt0 - timepointt1",
+    t0_vs_t2 = "timepointt0 - timepointt2",
+    t1_vs_t2 = "timepointt1 - timepointt2"
+  )
+)
+
+# Visualize contrast matrix
+plotContrasts(L)
+```
+```{r}
+fitmm_ruraldiet_diet <- dream(t(sysmex_ruraldiet_diet_infl_log), ~ 0 + timepoint + Age + BMI_t0 + activity_sum_rank_scaled + (1|PID)  , info_ruraldiet_diet, L, ddf = "Kenward-Roger", useWeights = FALSE)
+
+fitmm_ruraldiet_diet <- eBayes(fitmm_ruraldiet_diet)
+```
+
+```{r}
+# Examine design matrix
+head(fitmm_ruraldiet_diet$design, 3)
+```
+
+```{r}
+colnames(fitmm_ruraldiet_diet)
+
+```
+
+```{r}
+## create a list of results
+dream_ruraldiet_diet <- data.frame() # create empty dataframe for storage
+
+for(i in  colnames(L)){
+  print(i)
+  
+  tmpi <- variancePartition::topTable(fitmm_ruraldiet_diet, coef = i, number = Inf, adjust.method = "BH", sort.by = "p", lfc = 0)
+  
+  tmpi$comparison <- i
+  
+  tmpi$variable <- rownames(tmpi)
+  
+  tmpi <- as.data.frame(tmpi %>% add_significance(p.col = "adj.P.Val"))
+  
+  dream_ruraldiet_diet <- rbind(dream_ruraldiet_diet, tmpi)
+  
+}
+
+head(dream_ruraldiet_diet)
+```
+#### ... add paired log2FC
+```{r}
+identical(rownames(info_ruraldiet_diet), rownames(sysmex_ruraldiet_diet_infl_log))
+```
+
+```{r}
+pairedFC_ruraldiet_diet <- data.frame()
+
+for ( i in colnames(L)){
+  print(i)
+  
+  ctr_condition = str_split_fixed(i, "_vs_",2)[,1]
+  test_condition = str_split_fixed(i, "_vs_",2)[,2]
+  
+  print(ctr_condition)
+  print(test_condition)
+  
+  ctrids <- rownames(subset(info_ruraldiet_diet, as.character(timepoint) == ctr_condition))
+  testids <- rownames(subset(info_ruraldiet_diet, as.character(timepoint) == test_condition))
+
+  tmpfc <- fcros::fcrosFCmat(t(sysmex_ruraldiet_diet_infl_log), ctrids, testids, log2.opt = 0)
+
+  tmp_pairedFC <- data.frame(variable = tmpfc$idnames, 
+                                       FC = as.numeric(tmpfc$FC), 
+                                       FC2 = as.numeric(tmpfc$FC2))
+
+  tmp_pairedFC$log2FC <- log2(tmp_pairedFC$FC)
+  tmp_pairedFC$log2FC2 <- log2(tmp_pairedFC$FC2)
+
+  tmp_pairedFC$direction <- ifelse(tmp_pairedFC$log2FC2>0,"up",  "down")
+
+  tmp_pairedFC$comparison <- i
+  
+  pairedFC_ruraldiet_diet <- rbind(pairedFC_ruraldiet_diet, tmp_pairedFC)
+  
+}
+
+head(pairedFC_ruraldiet_diet)
+```
+
+```{r}
+### add paired FC
+pairedFC_ruraldiet_diet$merged <- paste0(pairedFC_ruraldiet_diet$variable,"_", pairedFC_ruraldiet_diet$comparison)
+
+dream_ruraldiet_diet$merged <- paste0(dream_ruraldiet_diet$variable,"_", dream_ruraldiet_diet$comparison)
+
+cols_2_add <- c("FC","FC2","log2FC","log2FC2","direction","merged")
+
+dream_ruraldiet_diet <- merge(dream_ruraldiet_diet, pairedFC_ruraldiet_diet[,cols_2_add], by = "merged")
+
+dream_ruraldiet_diet$regulation <- ifelse(dream_ruraldiet_diet$adj.P.Val.signif != "ns", 
+                                         dream_ruraldiet_diet$direction, "ns")
+
+rownames(dream_ruraldiet_diet) <- dream_ruraldiet_diet$merged
+
+head(dream_ruraldiet_diet)
+```
+
+```{r}
+list_sig_dream_ruraldiet_diet <- list()
+
+for(i in unique(dream_ruraldiet_diet$comparison)){
+  
+  print(i)
+  
+  list_sig_dream_ruraldiet_diet[[i]] <- split(
+    subset(dream_ruraldiet_diet, adj.P.Val.signif != "ns" & comparison == i)$variable,
+     subset(dream_ruraldiet_diet, adj.P.Val.signif != "ns" & comparison == i)$regulation
+    )
+  
+}
+
+str(list_sig_dream_ruraldiet_diet)
+```
+```{r}
+list_sig_dream_ruraldiet_diet
+```
+
+
+# ---------------------------------------
+
+### 2.2. urban controls
+## *Dream* : urban controls
+### prepare data
+### ... info table
+```{r}
+info_ruraldiet_contol <- subset(sample_table, diet == "controls_u")
+rownames(info_ruraldiet_contol) <- info_ruraldiet_contol$ID
+
+table(info_ruraldiet_contol$diet, info_ruraldiet_contol$timepoint)
+```
+
+### ... sysmex table
+```{r}
+sysmex_ruraldiet_ctr_infl <- sysmex[match(rownames(info_ruraldiet_contol), rownames(sysmex)),]
+
+vis_miss(sysmex_ruraldiet_ctr_infl)
+```
+### ... log transform
+```{r}
+sysmex_ruraldiet_ctr_infl_log <- apply(sysmex_ruraldiet_ctr_infl, 2, function(x){
+  log2(x + 0.01)
+})
+
+sysmex_ruraldiet_ctr_infl_log <- as.data.frame(sysmex_ruraldiet_ctr_infl_log)
+
+head(sysmex_ruraldiet_ctr_infl_log)
+```
+
+
+```{r}
+analysis_cols <- c("WBC", "NEUT_A", "IG_A", "IG_P","NEUT_GI","NEUT_RI","MONO_A","RE_MONO_A","RE_Mono_P", "RE_MONO_PM", "RE_LYMP_A","RE_LYMP_P_L", "BASO_P")
+
+sysmex_ruraldiet_ctr_infl_log <- sysmex_ruraldiet_ctr_infl_log[,analysis_cols]
+
+vis_miss(sysmex_ruraldiet_ctr_infl_log)
+```
+
+```{r}
+identical(rownames(sysmex_ruraldiet_ctr_infl_log), rownames(info_ruraldiet_contol))
+```
+
+```{r}
+## factor timepoints
+info_ruraldiet_contol$timepoint <- factor(info_ruraldiet_contol$timepoint, levels = c("t0","t1","t2"))
+
+unique(info_ruraldiet_contol$timepoint )
+```
+```{r}
+colnames(info_ruraldiet_contol)
+```
+
+```{r}
+L <- makeContrastsDream(~ 0 + timepoint + Age + BMI_t0 + activity_sum_rank_scaled + (1|PID) , info_ruraldiet_contol,
+  contrasts = c(
+    t0_vs_t1 = "timepointt0 - timepointt1",
+    t0_vs_t2 = "timepointt0 - timepointt2",
+    t1_vs_t2 = "timepointt1 - timepointt2"
+  )
+)
+
+# Visualize contrast matrix
+plotContrasts(L)
+```
+```{r}
+fitmm_ruraldiet_ctr <- dream(t(sysmex_ruraldiet_ctr_infl_log), ~ 0 + timepoint + Age + BMI_t0 + activity_sum_rank_scaled + (1|PID)  , info_ruraldiet_contol, L, ddf = "Kenward-Roger", useWeights = FALSE)
+
+fitmm_ruraldiet_ctr <- eBayes(fitmm_ruraldiet_ctr)
+```
+
+```{r}
+# Examine design matrix
+head(fitmm_ruraldiet_ctr$design, 3)
+```
+
+```{r}
+colnames(fitmm_ruraldiet_ctr)
+
+```
+
+```{r}
+## create a list of results
+dream_ruraldiet_ctr <- data.frame() # create empty dataframe for storage
+
+for(i in  colnames(L)){
+  print(i)
+  
+  tmpi <- variancePartition::topTable(fitmm_ruraldiet_ctr, coef = i, number = Inf, adjust.method = "BH", sort.by = "p", lfc = 0)
+  
+  tmpi$comparison <- i
+  
+  tmpi$variable <- rownames(tmpi)
+  
+  tmpi <- as.data.frame(tmpi %>% add_significance(p.col = "adj.P.Val"))
+  
+  dream_ruraldiet_ctr <- rbind(dream_ruraldiet_ctr, tmpi)
+  
+}
+
+head(dream_ruraldiet_ctr)
+```
+#### ... add paired log2FC
+```{r}
+identical(rownames(info_ruraldiet_contol), rownames(sysmex_ruraldiet_ctr_infl_log))
+```
+
+```{r}
+pairedFC_ruraldiet_ctr <- data.frame()
+
+for ( i in colnames(L)){
+  print(i)
+  
+  ctr_condition = str_split_fixed(i, "_vs_",2)[,1]
+  test_condition = str_split_fixed(i, "_vs_",2)[,2]
+  
+  print(ctr_condition)
+  print(test_condition)
+  
+  ctrids <- rownames(subset(info_ruraldiet_contol, as.character(timepoint) == ctr_condition))
+  testids <- rownames(subset(info_ruraldiet_contol, as.character(timepoint) == test_condition))
+
+  tmpfc <- fcros::fcrosFCmat(t(sysmex_ruraldiet_ctr_infl_log), ctrids, testids, log2.opt = 0)
+
+  tmp_pairedFC <- data.frame(variable = tmpfc$idnames, 
+                                       FC = as.numeric(tmpfc$FC), 
+                                       FC2 = as.numeric(tmpfc$FC2))
+
+  tmp_pairedFC$log2FC <- log2(tmp_pairedFC$FC)
+  tmp_pairedFC$log2FC2 <- log2(tmp_pairedFC$FC2)
+
+  tmp_pairedFC$direction <- ifelse(tmp_pairedFC$log2FC2>0,"up",  "down")
+
+  tmp_pairedFC$comparison <- i
+  
+  pairedFC_ruraldiet_ctr <- rbind(pairedFC_ruraldiet_ctr, tmp_pairedFC)
+  
+}
+
+head(pairedFC_ruraldiet_ctr)
+```
+
+```{r}
+### add paired FC
+pairedFC_ruraldiet_ctr$merged <- paste0(pairedFC_ruraldiet_ctr$variable,"_", pairedFC_ruraldiet_ctr$comparison)
+
+dream_ruraldiet_ctr$merged <- paste0(dream_ruraldiet_ctr$variable,"_", dream_ruraldiet_ctr$comparison)
+
+cols_2_add <- c("FC","FC2","log2FC","log2FC2","direction","merged")
+
+dream_ruraldiet_ctr <- merge(dream_ruraldiet_ctr, pairedFC_ruraldiet_ctr[,cols_2_add], by = "merged")
+
+dream_ruraldiet_ctr$regulation <- ifelse(dream_ruraldiet_ctr$adj.P.Val.signif != "ns", 
+                                         dream_ruraldiet_ctr$direction, "ns")
+
+rownames(dream_ruraldiet_ctr) <- dream_ruraldiet_ctr$merged
+
+head(dream_ruraldiet_ctr)
+```
+
+```{r}
+list_sig_dream_ruraldiet_ctr <- list()
+
+for(i in unique(dream_ruraldiet_ctr$comparison)){
+  
+  print(i)
+  
+  list_sig_dream_ruraldiet_ctr[[i]] <- split(
+    subset(dream_ruraldiet_ctr, adj.P.Val.signif != "ns" & comparison == i)$variable,
+     subset(dream_ruraldiet_ctr, adj.P.Val.signif != "ns" & comparison == i)$regulation
+    )
+  
+}
+
+str(list_sig_dream_ruraldiet_ctr)
+```
+```{r}
+list_sig_dream_ruraldiet_ctr
+```
+# ====================================
+### 3. Mbege
+
+## *Dream* : MBEGE
+### prepare data
+### ... info table
+```{r}
+info_mbege_diet <- subset(sample_table, diet == "MBEGE")
+rownames(info_mbege_diet) <- info_mbege_diet$ID
+
+table(info_mbege_diet$diet, info_mbege_diet$timepoint)
+```
+
+### ... sysmex table
+```{r}
+sysmex_mbege_diet_infl <- sysmex[match(rownames(info_mbege_diet), rownames(sysmex)),]
+
+vis_miss(sysmex_mbege_diet_infl)
+```
+```{r}
+sysmex_mbege_diet_infl_log <- apply(sysmex_mbege_diet_infl, 2, function(x){
+  log2(x + 0.01)
+})
+
+sysmex_mbege_diet_infl_log <- as.data.frame(sysmex_mbege_diet_infl_log)
+
+head(sysmex_mbege_diet_infl_log)
+```
+
+
+```{r}
+analysis_cols <- c("WBC", "NEUT_A", "IG_A", "IG_P","NEUT_GI","NEUT_RI","MONO_A","RE_MONO_A","RE_Mono_P", "RE_MONO_PM", "RE_LYMP_A","RE_LYMP_P_L", "BASO_P")
+
+sysmex_mbege_diet_infl_log <- sysmex_mbege_diet_infl_log[,analysis_cols]
+
+vis_miss(sysmex_mbege_diet_infl_log)
+```
+
+```{r}
+identical(rownames(sysmex_mbege_diet_infl_log), rownames(info_mbege_diet))
+```
+
+```{r}
+## factor timepoints
+info_mbege_diet$timepoint <- factor(info_mbege_diet$timepoint, levels = c("t0","t1","t2"))
+
+unique(info_mbege_diet$timepoint )
+```
+```{r}
+colnames(info_mbege_diet)
+```
+
+```{r}
+L <- makeContrastsDream(~ 0 + timepoint + Age + BMI_t0 + activity_sum_rank_scaled + (1|PID) , info_mbege_diet,
+  contrasts = c(
+    t0_vs_t1 = "timepointt0 - timepointt1",
+    t0_vs_t2 = "timepointt0 - timepointt2",
+    t1_vs_t2 = "timepointt1 - timepointt2"
+  )
+)
+
+# Visualize contrast matrix
+plotContrasts(L)
+```
+```{r}
+fitmm_mbege_diet <- dream(t(sysmex_mbege_diet_infl_log), ~ 0 + timepoint + Age + BMI_t0 + activity_sum_rank_scaled + (1|PID)  , info_mbege_diet, L, ddf = "Kenward-Roger", useWeights = FALSE)
+
+fitmm_mbege_diet <- eBayes(fitmm_mbege_diet)
+```
+
+```{r}
+# Examine design matrix
+head(fitmm_mbege_diet$design, 3)
+```
+
+```{r}
+colnames(fitmm_mbege_diet)
+
+```
+
+```{r}
+## create a list of results
+dream_mbege_diet <- data.frame() # create empty dataframe for storage
+
+for(i in  colnames(L)){
+  print(i)
+  
+  tmpi <- variancePartition::topTable(fitmm_mbege_diet, coef = i, number = Inf, adjust.method = "BH", sort.by = "p", lfc = 0)
+  
+  tmpi$comparison <- i
+  
+  tmpi$variable <- rownames(tmpi)
+  
+  tmpi <- as.data.frame(tmpi %>% add_significance(p.col = "adj.P.Val"))
+  
+  dream_mbege_diet <- rbind(dream_mbege_diet, tmpi)
+  
+}
+
+head(dream_mbege_diet)
+```
+#### ... add paired log2FC
+```{r}
+identical(rownames(info_mbege_diet), rownames(sysmex_mbege_diet_infl_log))
+```
+
+```{r}
+pairedFC_mbege_diet <- data.frame()
+
+for ( i in colnames(L)){
+  print(i)
+  
+  ctr_condition = str_split_fixed(i, "_vs_",2)[,1]
+  test_condition = str_split_fixed(i, "_vs_",2)[,2]
+  
+  print(ctr_condition)
+  print(test_condition)
+  
+  ctrids <- rownames(subset(info_mbege_diet, as.character(timepoint) == ctr_condition))
+  testids <- rownames(subset(info_mbege_diet, as.character(timepoint) == test_condition))
+
+  tmpfc <- fcros::fcrosFCmat(t(sysmex_mbege_diet_infl_log), ctrids, testids, log2.opt = 0)
+
+  tmp_pairedFC <- data.frame(variable = tmpfc$idnames, 
+                                       FC = as.numeric(tmpfc$FC), 
+                                       FC2 = as.numeric(tmpfc$FC2))
+
+  tmp_pairedFC$log2FC <- log2(tmp_pairedFC$FC)
+  tmp_pairedFC$log2FC2 <- log2(tmp_pairedFC$FC2)
+
+  tmp_pairedFC$direction <- ifelse(tmp_pairedFC$log2FC2>0,"up",  "down")
+
+  tmp_pairedFC$comparison <- i
+  
+  pairedFC_mbege_diet <- rbind(pairedFC_mbege_diet, tmp_pairedFC)
+  
+}
+
+head(pairedFC_mbege_diet)
+```
+
+```{r}
+### add paired FC
+pairedFC_mbege_diet$merged <- paste0(pairedFC_mbege_diet$variable,"_", pairedFC_mbege_diet$comparison)
+
+dream_mbege_diet$merged <- paste0(dream_mbege_diet$variable,"_", dream_mbege_diet$comparison)
+
+cols_2_add <- c("FC","FC2","log2FC","log2FC2","direction","merged")
+
+dream_mbege_diet <- merge(dream_mbege_diet, pairedFC_mbege_diet[,cols_2_add], by = "merged")
+
+dream_mbege_diet$regulation <- ifelse(dream_mbege_diet$adj.P.Val.signif != "ns", 
+                                         dream_mbege_diet$direction, "ns")
+
+rownames(dream_mbege_diet) <- dream_mbege_diet$merged
+
+head(dream_mbege_diet)
+```
+
+```{r}
+list_sig_dream_mbege_diet <- list()
+
+for(i in unique(dream_mbege_diet$comparison)){
+  
+  print(i)
+  
+  list_sig_dream_mbege_diet[[i]] <- split(
+    subset(dream_mbege_diet, adj.P.Val.signif != "ns" & comparison == i)$variable,
+     subset(dream_mbege_diet, adj.P.Val.signif != "ns" & comparison == i)$regulation
+    )
+  
+}
+
+str(list_sig_dream_mbege_diet)
+```
+```{r}
+list_sig_dream_mbege_diet
+```
+
+
+
+# ==========================
+
+# Summary results file
+### summary table
+```{r}
+summary_res_dream <- list(urban_diet = dream_urbandiet_diet, 
+                          rural_diet = dream_ruraldiet_diet, 
+                          MBEGE = dream_mbege_diet, 
+                          controls_u = dream_ruraldiet_ctr, 
+                          controls_r = dream_urbandiet_ctr)
+
+summary_res_dream <- do.call(rbind, Map(cbind, diet = names(summary_res_dream), summary_res_dream))
+
+head(summary_res_dream)
+```
+```{r}
+plot_order_vars <- c("WBC", "NEUT_A", "IG_A", "IG_P", "NEUT_GI", "NEUT_RI", "BASO_P","MONO_A","RE_MONO_A","RE_Mono_P","RE_MONO_PM","RE_LYMP_A","RE_LYMP_P_L" )
+```
+
+
+```{r}
+summary_res_dream$variable <- factor(summary_res_dream$variable, levels = rev(plot_order_vars))
+
+summary_res_dream$comparison <- factor(summary_res_dream$comparison, levels = c("t0_vs_t1","t1_vs_t2","t0_vs_t2"))
+
+summary_res_dream$diet <- factor(summary_res_dream$diet, levels = c("urban_diet","rural_diet","MBEGE","controls_r","controls_u"))
+```
+
+
+### plot
+```{r}
+plotdf <- subset(summary_res_dream, diet %in% c("urban_diet","rural_diet","MBEGE"))
+plotdf$label <- ifelse(plotdf$adj.P.Val.signif != "ns", plotdf$adj.P.Val.signif, NA)
+myshapes <- c("up" = 24, "down" = 25,"ns" = NA)
+max_val <- round(max(plotdf$log2FC2),1)*1.2
+
+summary_plot <-  ggplot(plotdf, aes(x= comparison, y= variable, fill= log2FC2))+
+  geom_point(size = 5, aes(shape = regulation))+
+  scale_shape_manual(values = myshapes)+
+  facet_wrap(.~diet, nrow = 1)+
+  geom_text(aes(label = label), size = 6, fontface = "bold")+
+  theme_bw()+
+  scale_fill_gradientn(colours = c("blue","white","red"), limits = c(-max_val, max_val),
+                       na.value = "white")+
+  theme(axis.text.x = element_text(angle = 90), 
+        axis.text.y = element_text())
+
+summary_plot
+```
+
+```{r}
+# ## save sysmex table
+# write.csv(sample_table,"./241118_sample_table_sysmex.csv")
+# ## save sample table table
+# write.csv(sysmex[,analysis_cols], "./241118_sysmex_df.csv")
+```
+
+
+
+# =================================================
+
+# 4. Session info
+
+```{r}
+sessionInfo()
+```
+

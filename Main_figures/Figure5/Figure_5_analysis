@@ -1,0 +1,3107 @@
+---
+title: "metabolomics - intervention"
+author: "TP"
+date: "2024-11-24"
+output: 
+  html_document:
+    toc: true
+    toc_float: 
+      collapsed: false
+      smooth_scroll: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 0. preperations
+
+## Load packages
+```{r}
+
+library(variancePartition)
+library(lme4)
+library(emmeans)
+library(graphlayouts)
+library(ggnewscale)
+library(ggforce)
+library(scales)
+library(wesanderson)
+library(extrafont)
+library(ggraph)
+library(igraph)
+library(tidygraph)
+library(metaboliteIDmapping)
+library(lattice)
+library(ggpattern)
+library(reshape2)
+library(MKmisc)
+library(magrittr)
+library(RaMP)
+library(ggExtra)
+library(FactoMineR)
+library(factoextra)
+library(fgsea)
+library(enrichR)
+library(fgsea)
+library(clusterProfiler)
+library(httr)
+library(ggplot2)
+library(dplyr)
+library(ggpubr)
+library(openxlsx)
+library(naniar)
+library(rstatix)
+library(patchwork)
+library(ggsci)
+library(RColorBrewer)
+library(tidyverse)
+library(latrend)
+library(ggrepel)
+library(IMIFA)
+library(fcros)
+library(easyalluvial)
+library(ggridges)
+library(ggtext)
+library(UpSetR)
+library(ComplexHeatmap)
+library(pheatmap)
+library(ggvenn)
+```
+
+## colors
+```{r}
+# col_timepoint
+col_timepoint<- brewer.pal(n = 3, name = "Dark2")
+names(col_timepoint)<-c("t0", "t1", "t2")
+
+col_diet_diet <- c("#0564ad", "#b91c1c", "#f1c232")
+names(col_diet_diet) <- c("rural_diet", "urban_diet", "MBEGE")
+```
+
+
+## Functions
+### ... Getpathway_RAMPdb
+```{r}
+Getpathway_RAMPdb <- function(hmdbinput){
+  require(httr)
+  require(jsonlite)
+  url = "https://rampdb.nih.gov/api/pathways-from-analytes"
+  encode = "json"
+  output <- list()
+  
+  payload = list(query_name = "myQuery",
+                       analytes = hmdbinput)
+        response = POST(url = url,
+                        body = payload,
+                        encode = encode)
+        json = httr::content(response, as = "text")
+        
+        resultsall = fromJSON(json)
+        return(resultsall$data)
+}
+
+```
+
+### ... Get_chemical enrichment
+```{r}
+Getchemenrich_RAMPdb <- function(hmdbinput){
+  require(httr)
+  require(jsonlite)
+  url = "https://rampdb.nih.gov/api/chemical-enrichment"
+  encode = "json"
+  output <- list()
+  
+  payload = list(query_name = "myQuery",
+                       metabolites = hmdbinput)
+        response = POST(url = url,
+                        body = payload,
+                        encode = encode)
+        json = httr::content(response, as = "text")
+        
+        resultsall = fromJSON(json)
+        return(resultsall$data)
+}
+
+```
+
+### ... Get_chemical-classes
+```{r}
+Getchemclass_RAMPdb <- function(hmdbinput){
+  require(httr)
+  require(jsonlite)
+  url = "https://rampdb.nih.gov/api/chemical-classes"
+  encode = "json"
+  output <- list()
+  
+  payload = list(query_name = "myQuery",
+                       metabolites = hmdbinput)
+        response = POST(url = url,
+                        body = payload,
+                        encode = encode)
+        json = httr::content(response, as = "text")
+        
+        resultsall = fromJSON(json)
+        return(resultsall$data)
+}
+
+```
+
+### ... Get_fisher_pathway
+```{r}
+Getfisherpathway_RAMPdb <- function(hmdbinput){
+  require(httr)
+  require(jsonlite)
+  url = "https://rampdb.nih.gov/api/combined-fisher-test"
+  encode = "json"
+  output <- list()
+  
+  payload = list(query_name = "myQuery",
+                       analytes = hmdbinput)
+        response = POST(url = url,
+                        body = payload,
+                        encode = encode)
+        json = httr::content(response, as = "text")
+        
+        resultsall = fromJSON(json)
+        return(resultsall$data)
+}
+
+```
+
+
+
+
+
+### ... scalecolors
+```{r}
+scaleColors <- function(data = input_scale, # data to use
+                        maxvalue = NULL, # value at which the color is fully red / blue
+                        pal = "RdBu"
+                        ){
+  if(is.null(maxvalue)){
+    maxvalue <- floor(min(abs(min(data)), max(data)))
+  }
+  
+
+  
+  if(max(data) > abs(min(data))){
+    if(ceiling(max(data)) == maxvalue){
+      myBreaks <- c(floor(-max(data)), seq(-maxvalue+0.2, maxvalue-0.2, 0.2),  ceiling(max(data)))
+    } else{
+      myBreaks <- c(floor(-max(data)), seq(-maxvalue, maxvalue, 0.2),  ceiling(max(data)))
+    }
+    paletteLength <- length(myBreaks)
+    myColor <- colorRampPalette(rev(RColorBrewer::brewer.pal(n = 11, name = pal)))(paletteLength)
+  } else {
+    if(-floor(min(data)) == maxvalue){
+      myBreaks <- c(floor(min(data)), seq(-maxvalue+0.2, maxvalue-0.2, 0.2),  ceiling(min(data)))
+    } else{
+      myBreaks <- c(floor(min(data)), seq(-maxvalue, maxvalue, 0.2),  ceiling(abs(min(data))))
+    }
+    paletteLength <- length(myBreaks)
+    myColor <- colorRampPalette(rev(RColorBrewer::brewer.pal(n = 11, name = pal)))(paletteLength)
+  }
+  return(list(breaks = myBreaks, color = myColor))
+}
+```
+
+### ... PCA
+```{r}
+plotPCAnew<-         function (pca_input = dds_vst,
+                                ntop = "all",
+                                xPC = 1, 
+                                yPC = 2,
+                                point_size=3,
+                                anno_colour,
+                                anno = sample_annotation, 
+                                color,
+                                shape = NULL,
+                                title="PCA", 
+                                label = NULL, 
+                                label_subset = NULL, 
+                                facet=NULL,
+                                exclude = NULL,
+                                color.ellipse= FALSE,
+                                Scale = F
+){
+  
+  
+  if(!is.data.frame(pca_input) & !is.matrix(pca_input) ){
+    vst_matrix <-as.matrix(assay(pca_input))
+  }else{
+    vst_matrix <- pca_input
+  }
+  
+  
+  if (!is.null(exclude)==TRUE){
+    print(paste0("samples ",exclude,"are excluded from analysis"))
+    #delete from vst_matrix
+    vst_matrix<- vst_matrix[,which(!colnames(vst_matrix) %in% exclude)]
+    #delete from anno
+    anno<-anno[which(!rownames(anno) %in% exclude),]
+  }
+  
+  if(ntop=="all"){
+    pca <- prcomp(t(vst_matrix), scale. = Scale) 
+  }else if (is.numeric(ntop)){
+    # select the ntop genes by variance
+    select <- order(rowVars(vst_matrix), decreasing=TRUE)[c(1:ntop)]
+    pca <- prcomp(t(vst_matrix[select,]), scale. = Scale)
+  } else {
+    pca <- prcomp(t(vst_matrix[ntop,]), scale. = Scale)
+  }
+  
+  #calculate explained variance per PC
+  explVar <- pca$sdev^2/sum(pca$sdev^2)
+  # transform variance to percent
+  percentVar <- round(100 * explVar[c(xPC,yPC)], digits=1)
+  
+  # Define data for plotting  
+  pcaData <- data.frame(xPC=pca$x[,xPC], 
+                        yPC=pca$x[,yPC], 
+                        color = anno[[color]],
+                        name= as.character(anno$ID),
+                        stringsAsFactors = F)
+  
+  #plot PCA
+  
+  if (!is.null(facet)==TRUE){
+    pcaData$facet_var<-anno[[facet]]
+  } else {
+    pcaData<-pcaData
+  }
+  
+  if(is.factor(pcaData$color) || is.character(pcaData$color)|| is.integer(pcaData$color)){
+    if(is.null(shape)==TRUE){
+      pca_plot <- ggplot(pcaData, aes(x = xPC, y = yPC)) +
+        geom_point(size =point_size, aes(color= color))
+    }else{
+      pcaData$shape = anno[[shape]]
+      pca_plot <- ggplot(pcaData, aes(x = xPC, y = yPC)) +
+        geom_point(size =point_size, aes(color=color, shape=shape)) +
+        scale_shape_discrete(name=shape)
+    }
+    
+    if(is.null(anno_colour[1])==TRUE){
+      pca_plot <- pca_plot + scale_color_discrete(name=color)
+    }else{
+      pca_plot <- pca_plot + scale_color_manual(values=anno_colour, name=color)
+    }
+    
+  }else if(is.numeric(pcaData$color)){
+    if(is.null(shape) == TRUE){
+      pca_plot <- ggplot(pcaData, aes(x = xPC, y = yPC)) +
+        geom_point(size =point_size, aes(color=color)) +
+        scale_color_gradientn(colours = bluered(100),name=color)
+    }else{
+      pcaData$shape = anno[[shape]]
+      pca_plot <- ggplot(pcaData, aes(x = xPC, y = yPC)) +
+        geom_point(size =point_size, aes(colour=color, shape=shape)) +
+        scale_color_gradientn(colours = bluered(100),name=color)+
+        scale_shape_discrete(name=shape)
+    }
+  }
+  
+  
+    
+  
+  # adds a label to the plot. To label only specific points, put them in the arument label_subset
+  if (!is.null(label) == TRUE){
+    pcaData$label <- anno[[label]]
+    if(!is.null(label_subset) == TRUE){
+      pcaData_labeled <- pcaData[pcaData$label %in% label_subset,]
+    } else {
+      pcaData_labeled <- pcaData
+    }
+    pca_plot <- pca_plot + 
+      geom_text_repel(data = pcaData_labeled, aes(label = label), nudge_x = 2, nudge_y = 2, colour = "black") 
+  }
+  
+  pca_plot <- pca_plot+
+    xlab(paste0("PC ",xPC, ": ", percentVar[1], "% variance")) +
+    ylab(paste0("PC ",yPC,": ", percentVar[2], "% variance")) +
+    coord_fixed()+
+    theme_classic()+        
+    theme(aspect.ratio = 1)+
+    ggtitle(title)
+  
+  
+  
+  #add facet if required
+  if (is.null(facet)==TRUE){
+    pca_plot<-pca_plot
+  } else {
+    pca_plot<-pca_plot + facet_wrap(.~facet_var)
+  }
+  
+  
+  #add groups ellipse
+  if (color.ellipse==TRUE){
+    pca_plot <- pca_plot + stat_ellipse(type = "norm",aes(color=color))
+  }
+  
+  pca_plot
+}
+
+```
+
+
+# ----------------------
+
+# 1. Import data
+## Import sample table
+```{r}
+sample_table <- read.csv("./241130_sample_table.csv", row.names = 1)
+rownames(sample_table) <- sample_table$ID
+
+head(sample_table)
+```
+
+### .. factor sample table
+```{r}
+# diet
+sample_table$diet <- factor(sample_table$diet, levels = c("urban_diet","rural_diet","MBEGE","controls_r","controls_u"))
+
+#timepoint
+sample_table$timepoint <- factor(sample_table$timepoint, levels = c("t0","t1","t2"))
+
+```
+
+## Import metabolites data
+```{r}
+metabo_log2 <- read.csv("./241130_metabo_log_samples.csv", row.names = 1)
+
+head(metabo_log2)
+```
+
+## Import metabolites annotation 
+```{r}
+melt_annotation_tal_new <- read.csv("./241130_melt_annotation_tal_new.csv", row.names = 1)
+
+head(melt_annotation_tal_new)
+```
+
+# ---------------------------
+# 2. PCA
+## Urban diet PCA
+```{r}
+sample_table_urbandiet <- subset(sample_table, diet == "urban_diet")
+rownames(sample_table_urbandiet) <- sample_table_urbandiet$ID
+
+metabo_log2_urbandiet <-metabo_log2[,match(sample_table_urbandiet$ID, colnames(metabo_log2))]
+
+identical(sample_table_urbandiet$ID, colnames(metabo_log2_urbandiet))
+
+pca.urbandiet <- plotPCAnew(pca_input = metabo_log2_urbandiet, 
+           ntop = "all", Scale = T,
+           xPC = 1, yPC = 2, point_size = 4, 
+           anno_colour = col_timepoint, 
+            anno= sample_table_urbandiet, 
+           color = "timepoint", color.ellipse = T, title = "urban diet")+border() + theme_bw()+ theme(aspect.ratio = 1)
+
+pca.urbandiet
+```
+
+
+## Rural diet PCA
+```{r}
+sample_table_ruraldiet <- subset(sample_table, diet == "rural_diet")
+rownames(sample_table_ruraldiet) <- sample_table_ruraldiet$ID
+
+metabo_log2_ruraldiet <-metabo_log2[,match(sample_table_ruraldiet$ID, colnames(metabo_log2))]
+
+identical(sample_table_ruraldiet$ID, colnames(metabo_log2_ruraldiet))
+
+pca.ruraldiet <- plotPCAnew(pca_input = metabo_log2_ruraldiet, 
+           ntop = "all", Scale = T,
+           xPC = 1, yPC = 2, point_size = 4, 
+           anno_colour = col_timepoint,  anno= sample_table_ruraldiet, 
+           color = "timepoint", color.ellipse = T, title = "rural diet")+border() + theme_bw()+ theme(aspect.ratio = 1)
+
+pca.ruraldiet
+```
+
+
+
+## MBEGE diet PCA
+
+```{r}
+sample_table_mbege <- subset(sample_table, diet == "MBEGE")
+rownames(sample_table_mbege) <- sample_table_mbege$ID
+
+metabo_log2_mbege <-metabo_log2[,match(sample_table_mbege$ID, colnames(metabo_log2))]
+
+identical(sample_table_mbege$ID, colnames(metabo_log2_mbege))
+
+pca.mbege <- plotPCAnew(pca_input = metabo_log2_mbege, 
+           ntop = "all", Scale = T,
+           xPC = 1, yPC = 2, point_size = 4, 
+           anno_colour = col_timepoint, anno= sample_table_mbege, 
+           color = "timepoint", color.ellipse = T, title = "mbege diet")+border() + theme_bw()+ theme(aspect.ratio = 1)
+
+pca.mbege
+```
+
+# ===============================================
+# 3. Analysis
+## SET FC threshold
+```{r}
+fc_threshold <- 1.2
+```
+
+
+# -----------------------------
+# 3.1. Urban diet
+```{r}
+data_melt_urbandiet <- as.data.frame(t(metabo_log2_urbandiet))
+data_melt_urbandiet$ID <- rownames(data_melt_urbandiet)
+
+data_melt_urbandiet <- reshape2::melt(data_melt_urbandiet, id.var = "ID")
+data_melt_urbandiet$timepoint <- sample_table[match(data_melt_urbandiet$ID, sample_table$ID),"timepoint"]
+data_melt_urbandiet$PID <- sample_table[match(data_melt_urbandiet$ID, sample_table$ID),"PID"]
+
+head(data_melt_urbandiet)
+```
+
+
+
+
+# ----------------------
+## Variance partition: Urban diet
+
+
+### step1: find metabolites contributing to more than 5% variation for each time comparison
+```{r}
+form <- ~ Age + (1 | PID) + timepoint_numeric + BMI_t0 + activity_sum_rank_scaled
+
+varpart_features_urbandiet <- list()
+
+for ( i in c("t0_vs_t1","t1_vs_t2","t0_vs_t2")){
+  tp1 <- str_split_fixed(i,"_vs_",2)[,1]
+  tp2 <- str_split_fixed(i,"_vs_",2)[,2]
+  
+  tmpinfo <- subset(sample_table_urbandiet, timepoint %in% c(tp1,tp2))
+  
+  ## make timepoint variable into numeric
+  tmpinfo$timepoint_numeric <- as.numeric(gsub("t","",tmpinfo$timepoint))
+  
+  tmpdata <- metabo_log2_urbandiet[,match(tmpinfo$ID, colnames(metabo_log2_urbandiet))]
+  
+  if(identical(tmpinfo$ID, colnames(tmpdata))){
+    print("identical")
+  } else{
+    stop("error, info and data samples not ordered correctly")
+  }
+  
+  
+  tmpvarpart <- fitExtractVarPartModel(tmpdata, form, tmpinfo)
+  
+  # sort variables (i.e. columns) by median fraction
+#       of variance explained
+tmpvarpart <- sortCols(tmpvarpart)
+
+varpart_features_urbandiet[[i]]$varpart <- tmpvarpart
+varpart_features_urbandiet[[i]]$info <- tmpinfo
+varpart_features_urbandiet[[i]]$data <- tmpdata
+
+}
+```
+
+### step2: plot results
+```{r}
+## colors 
+colors_vars <- c("Residuals" = "lightgray",
+                 "timepoint_numeric"  = "turquoise",
+                 "Age" = "purple",
+                 "BMI_t0" = "cornflowerblue",
+                 "PID" = "lightyellow",
+                 "activity_sum_rank_scaled" = "tomato3")
+```
+
+```{r}
+list_parvar_plots_urbandiet <- list()
+
+for (i in names(varpart_features_urbandiet)){
+  print(i)
+  
+tmp_df <- as.data.frame(varpart_features_urbandiet[[i]]$varpart)
+tmp_df$ionMz <- rownames(tmp_df)
+tmp_df <- reshape2::melt(tmp_df, id.vars = "ionMz")
+
+timepoint_var <- subset(tmp_df, variable == "timepoint_numeric")$value
+names(timepoint_var) <- as.character(subset(tmp_df, variable == "timepoint_numeric")$ionMz)
+
+tmp_df$timepoint <- timepoint_var[match(tmp_df$ionMz, names(timepoint_var))]
+tmp_df$value100 <- 100*tmp_df$value
+
+## factor
+tmp_df$variable <- factor(tmp_df$variable, levels = rev(c("timepoint_numeric","Age","BMI_t0","activity_sum_rank_scaled", "PID","Residuals")))
+
+
+tmp_df <- tmp_df[order(tmp_df$timepoint, decreasing = T),]
+
+tmp_df$compoundname <- melt_annotation_tal_new[match(as.character(tmp_df$ionMz), as.character( melt_annotation_tal_new$ionMz)),"CompoundID_new"]
+
+# barplot
+tmpplot <- ggplot(subset(tmp_df, timepoint >0.05), aes(x = reorder(compoundname, timepoint), y = value100, fill = variable))+
+  geom_bar(stat = "identity", position = "stack")+
+  coord_flip()+
+  scale_fill_manual(values = colors_vars)+
+ xlab("")+
+  ylab("% Explained variance")+
+  ggtitle("t0vst1 Top contributions (>5%) - timepoint")
+
+
+list_parvar_plots_urbandiet[["df"]][[i]] <- tmp_df
+list_parvar_plots_urbandiet[["plot"]][[i]] <- tmpplot
+}
+```
+```{r fig.width=20, fig.height=10}
+wrap_plots(list_parvar_plots_urbandiet$plot, nrow = 1, guides = "collect")
+```
+
+### step3: extract metabolites contributing >5% for downstream analysis
+```{r}
+for (i in names(list_parvar_plots_urbandiet$df)){
+  print(i)
+  
+  tmp_df <- NULL
+  
+  tmp_df <- list_parvar_plots_urbandiet$df[[i]]
+  
+  var_metabo <- unique(tmp_df[tmp_df$timepoint>0.05,"ionMz"])
+
+  print(paste0(round(length(var_metabo)*100/length(unique(tmp_df$ionMz)),digits = 2),"% metabolites taken for analysis for comparison ",i))
+  
+  
+  ## add to varpart_features_urbandiet
+  varpart_features_urbandiet[[i]]$vars <- var_metabo
+}
+```
+
+
+
+### step4: perform dream analysis
+```{r}
+list_dream_urbandiet <- list()
+
+for (i in names(varpart_features_urbandiet)){
+  print(i)
+  
+  myinfo <- varpart_features_urbandiet[[i]]$info
+  ## factor for the variables present
+  myinfo$timepoint <- factor(myinfo$timepoint, levels = unique(myinfo$timepoint))
+  
+  mydata <- varpart_features_urbandiet[[i]]$data
+  ## filter variables
+  mydata <- mydata[which(rownames(mydata) %in% as.character( varpart_features_urbandiet[[i]]$vars)),]
+  
+  mycontrasts <- c(
+    t0_vs_t1 = "timepointt0 - timepointt1",
+    t0_vs_t2 = "timepointt0 - timepointt2",
+    t1_vs_t2 = "timepointt1 - timepointt2"
+  )
+  
+  
+  L <- makeContrastsDream(~ 0 + timepoint + BMI_t0 + Age + activity_sum_rank_scaled + (1|PID) , myinfo,
+  contrasts = mycontrasts[names(mycontrasts) == i]
+)
+
+# Visualize contrast matrix
+plotContrasts(L)
+
+fitmm_dream <- dream(mydata, ~ 0 + timepoint + BMI_t0 + Age + activity_sum_rank_scaled + (1|PID), myinfo, L)
+
+fitmm_dream <- eBayes(fitmm_dream)
+
+dream_res <- variancePartition::topTable(fitmm_dream, coef = i, number = Inf, adjust.method = "BH", sort.by = "p", lfc = 0)
+
+dream_res$ionMz <- rownames(dream_res)
+
+print(nrow(dream_res[dream_res$adj.P.Val <=0.05,]))
+
+list_dream_urbandiet[[i]] <- dream_res
+}
+```
+```{r}
+res_dream_urbandiet <- do.call(rbind, Map(cbind, comparison = names(list_dream_urbandiet),list_dream_urbandiet))
+
+head(res_dream_urbandiet)
+```
+```{r}
+## add sig
+res_dream_urbandiet <- as.data.frame(res_dream_urbandiet %>% add_significance(p.col = "adj.P.Val"))
+```
+
+### step5: calculate paire fc
+
+```{r}
+pairedFC_urbandiet_diet <- data.frame()
+
+for(i in names(varpart_features_urbandiet)){
+  print(i)
+  
+  ctr_condition = str_split_fixed(i, "_vs_",2)[,1]
+  test_condition = str_split_fixed(i, "_vs_",2)[,2]
+  
+  print(ctr_condition)
+  print(test_condition)
+  
+  ctrids <- rownames(subset(varpart_features_urbandiet[[i]]$info, 
+                            as.character(timepoint) == ctr_condition))
+  testids <- rownames(subset(varpart_features_urbandiet[[i]]$info, 
+                             as.character(timepoint) == test_condition))
+
+  
+  
+  tmpfc <- fcros::fcrosFCmat(varpart_features_urbandiet[[i]]$data, ctrids, testids, log2.opt = 0)
+
+  tmp_pairedFC <- data.frame(ionMz = tmpfc$idnames, 
+                                       FC = as.numeric(tmpfc$FC), 
+                                       FC2 = as.numeric(tmpfc$FC2))
+
+  tmp_pairedFC$log2FC <- log2(tmp_pairedFC$FC)
+  tmp_pairedFC$log2FC2 <- log2(tmp_pairedFC$FC2)
+
+  tmp_pairedFC$direction <- ifelse(tmp_pairedFC$log2FC2>0,"up",  "down")
+
+  tmp_pairedFC$comparison <- i
+  
+  pairedFC_urbandiet_diet <- rbind(pairedFC_urbandiet_diet, tmp_pairedFC)
+}
+```
+### step6: combine dream and paireFC results
+
+```{r}
+### add paired FC
+pairedFC_urbandiet_diet$merged <- paste0(pairedFC_urbandiet_diet$ionMz,"_", pairedFC_urbandiet_diet$comparison)
+
+res_dream_urbandiet$merged <- paste0(res_dream_urbandiet$ionMz,"_", res_dream_urbandiet$comparison)
+
+cols_2_add <- c("FC","FC2","log2FC","log2FC2","direction","merged")
+
+res_dream_urbandiet <- merge(res_dream_urbandiet, pairedFC_urbandiet_diet[,cols_2_add], by = "merged")
+
+res_dream_urbandiet$regulation <- ifelse(res_dream_urbandiet$adj.P.Val.signif != "ns" & abs(res_dream_urbandiet$log2FC2) > log2(fc_threshold), res_dream_urbandiet$direction, "ns")
+
+rownames(res_dream_urbandiet) <- res_dream_urbandiet$merged
+
+res_dream_urbandiet$CompoundName <- melt_annotation_tal_new[match(as.character(res_dream_urbandiet$ionMz), as.character(melt_annotation_tal_new$ionMz)),"CompoundName"]
+
+res_dream_urbandiet$HMDB <- melt_annotation_tal_new[match(as.character(res_dream_urbandiet$ionMz), as.character(melt_annotation_tal_new$ionMz)),"CompoundID_new"]
+
+res_dream_urbandiet$label <- ifelse(res_dream_urbandiet$adj.P.Val.signif !="ns", str_trunc(res_dream_urbandiet$CompoundName,24),NA)
+
+head(res_dream_urbandiet)
+```
+
+### step7: list of sig metabolites
+```{r}
+list_sig_dream_urbandiet_diet <- list()
+
+for(i in unique(res_dream_urbandiet$comparison)){
+  
+  print(i)
+  
+  list_sig_dream_urbandiet_diet[[i]] <- split(
+    subset(res_dream_urbandiet, regulation != "ns" & comparison == i)$ionMz,
+     subset(res_dream_urbandiet, regulation != "ns" & comparison == i)$regulation
+    )
+  
+}
+
+str(list_sig_dream_urbandiet_diet)
+```
+```{r}
+list_sig_dream_urbandiet_diet_name <- list()
+
+for(i in unique(res_dream_urbandiet$comparison)){
+  
+  print(i)
+  
+  list_sig_dream_urbandiet_diet_name[[i]] <- split(
+    subset(res_dream_urbandiet, regulation != "ns" & comparison == i)$CompoundName,
+     subset(res_dream_urbandiet, regulation != "ns" & comparison == i)$regulation
+    )
+  
+}
+
+str(list_sig_dream_urbandiet_diet_name)
+```
+```{r}
+list_sig_dream_urbandiet_diet_hmdb <- list()
+
+for(i in unique(res_dream_urbandiet$comparison)){
+  
+  print(i)
+  
+  list_sig_dream_urbandiet_diet_hmdb[[i]] <- split(
+    subset(res_dream_urbandiet, regulation != "ns" & comparison == i)$HMDB,
+     subset(res_dream_urbandiet, regulation != "ns" & comparison == i)$regulation
+    )
+  
+}
+
+str(list_sig_dream_urbandiet_diet_hmdb)
+```
+
+### step8: plots
+count
+```{r}
+count_da_urbandiet <- as.data.frame(res_dream_urbandiet %>% 
+                                      group_by(comparison) %>% 
+                                      summarize(up = sum(regulation == "up"),
+                                                down = sum(regulation == "down")))
+
+
+count_da_urbandiet <- reshape2::melt(count_da_urbandiet)
+
+count_da_urbandiet
+```
+
+```{r}
+count_da_urbandiet$comparison <- factor(count_da_urbandiet$comparison, levels = c("t0_vs_t1","t1_vs_t2","t0_vs_t2"))
+
+ggplot(count_da_urbandiet, aes(x= comparison, y= value, fill = variable))+
+  geom_bar(stat = "identity",color = "black", position = "stack")+
+  scale_fill_manual(values = c("up" = "tomato3","down" = "cornflowerblue"))+
+  geom_text(vjust = 1, position = position_stack(), aes(label = value))+
+  theme_bw()+
+  ggtitle("Urban diet")+
+  theme(aspect.ratio = 1.5)
+```
+
+# ==================================================
+# 3.2. Rural diet
+## data distribution
+```{r}
+data_melt_ruraldiet <- as.data.frame(t(metabo_log2_ruraldiet))
+data_melt_ruraldiet$ID <- rownames(data_melt_ruraldiet)
+
+data_melt_ruraldiet <- reshape2::melt(data_melt_ruraldiet, id.var = "ID")
+data_melt_ruraldiet$timepoint <- sample_table[match(data_melt_ruraldiet$ID, sample_table$ID),"timepoint"]
+data_melt_ruraldiet$PID <- sample_table[match(data_melt_ruraldiet$ID, sample_table$ID),"PID"]
+
+head(data_melt_ruraldiet)
+```
+
+
+
+
+
+
+# ------------------------------------------
+## Variance partition - Rural diet
+
+### step1: find metabolites contributing to more than 5% variation for each time comparison
+```{r}
+form <- ~ Age + (1 | PID) + timepoint_numeric + BMI_t0 + activity_sum_rank_scaled
+
+varpart_features_ruraldiet <- list()
+
+for ( i in c("t0_vs_t1","t1_vs_t2","t0_vs_t2")){
+  tp1 <- str_split_fixed(i,"_vs_",2)[,1]
+  tp2 <- str_split_fixed(i,"_vs_",2)[,2]
+  
+  tmpinfo <- subset(sample_table_ruraldiet, timepoint %in% c(tp1,tp2))
+  
+  ## make timepoint variable into numeric
+  tmpinfo$timepoint_numeric <- as.numeric(gsub("t","",tmpinfo$timepoint))
+  
+  tmpdata <- metabo_log2_ruraldiet[,match(tmpinfo$ID, colnames(metabo_log2_ruraldiet))]
+  
+  if(identical(tmpinfo$ID, colnames(tmpdata))){
+    print("identical")
+  } else{
+    stop("error, info and data samples not ordered correctly")
+  }
+  
+  
+  tmpvarpart <- fitExtractVarPartModel(tmpdata, form, tmpinfo)
+  
+  # sort variables (i.e. columns) by median fraction
+#       of variance explained
+tmpvarpart <- sortCols(tmpvarpart)
+
+varpart_features_ruraldiet[[i]]$varpart <- tmpvarpart
+varpart_features_ruraldiet[[i]]$info <- tmpinfo
+varpart_features_ruraldiet[[i]]$data <- tmpdata
+
+}
+```
+
+### step2: plot results
+```{r}
+## colors 
+colors_vars <- c("Residuals" = "lightgray",
+                 "timepoint_numeric"  = "turquoise",
+                 "Age" = "purple",
+                 "BMI_t0" = "cornflowerblue",
+                 "PID" = "lightyellow",
+                 "activity_sum_rank_scaled" = "tomato3")
+```
+
+```{r}
+list_parvar_plots_ruraldiet <- list()
+
+for (i in names(varpart_features_ruraldiet)){
+  print(i)
+  
+tmp_df <- as.data.frame(varpart_features_ruraldiet[[i]]$varpart)
+tmp_df$ionMz <- rownames(tmp_df)
+tmp_df <- reshape2::melt(tmp_df, id.vars = "ionMz")
+
+timepoint_var <- subset(tmp_df, variable == "timepoint_numeric")$value
+names(timepoint_var) <- as.character(subset(tmp_df, variable == "timepoint_numeric")$ionMz)
+
+tmp_df$timepoint <- timepoint_var[match(tmp_df$ionMz, names(timepoint_var))]
+tmp_df$value100 <- 100*tmp_df$value
+
+## factor
+tmp_df$variable <- factor(tmp_df$variable, levels = rev(c("timepoint_numeric","Age","BMI_t0","activity_sum_rank_scaled", "PID","Residuals")))
+
+
+tmp_df <- tmp_df[order(tmp_df$timepoint, decreasing = T),]
+
+tmp_df$compoundname <- melt_annotation_tal_new[match(as.character(tmp_df$ionMz), as.character( melt_annotation_tal_new$ionMz)),"CompoundID_new"]
+
+# barplot
+tmpplot <- ggplot(subset(tmp_df, timepoint >0.05), aes(x = reorder(compoundname, timepoint), y = value100, fill = variable))+
+  geom_bar(stat = "identity", position = "stack")+
+  coord_flip()+
+  scale_fill_manual(values = colors_vars)+
+ xlab("")+
+  ylab("% Explained variance")+
+  ggtitle("t0vst1 Top contributions (>5%) - timepoint")
+
+
+list_parvar_plots_ruraldiet[["df"]][[i]] <- tmp_df
+list_parvar_plots_ruraldiet[["plot"]][[i]] <- tmpplot
+}
+```
+```{r fig.width=20, fig.height=10}
+wrap_plots(list_parvar_plots_ruraldiet$plot, nrow = 1, guides = "collect")
+```
+
+### step3: extract metabolites contributing >5% for downstream analysis
+```{r}
+for (i in names(list_parvar_plots_ruraldiet$df)){
+  print(i)
+  
+  tmp_df <- NULL
+  
+  tmp_df <- list_parvar_plots_ruraldiet$df[[i]]
+  
+  var_metabo <- unique(tmp_df[tmp_df$timepoint>0.05,"ionMz"])
+
+  print(paste0(round(length(var_metabo)*100/length(unique(tmp_df$ionMz)),digits = 2),"% metabolites taken for analysis for comparison ",i))
+  
+  
+  ## add to varpart_features_ruraldiet
+  varpart_features_ruraldiet[[i]]$vars <- var_metabo
+}
+```
+
+
+
+### step4: perform dream analysis
+```{r}
+list_dream_ruraldiet <- list()
+
+for (i in names(varpart_features_ruraldiet)){
+  print(i)
+  
+  myinfo <- varpart_features_ruraldiet[[i]]$info
+  ## factor for the variables present
+  myinfo$timepoint <- factor(myinfo$timepoint, levels = unique(myinfo$timepoint))
+  
+  mydata <- varpart_features_ruraldiet[[i]]$data
+  ## filter variables
+  mydata <- mydata[which(rownames(mydata) %in% as.character( varpart_features_ruraldiet[[i]]$vars)),]
+  
+  mycontrasts <- c(
+    t0_vs_t1 = "timepointt0 - timepointt1",
+    t0_vs_t2 = "timepointt0 - timepointt2",
+    t1_vs_t2 = "timepointt1 - timepointt2"
+  )
+  
+  
+  L <- makeContrastsDream(~ 0 + timepoint + BMI_t0 + Age + activity_sum_rank_scaled + (1|PID) , myinfo,
+  contrasts = mycontrasts[names(mycontrasts) == i]
+)
+
+# Visualize contrast matrix
+plotContrasts(L)
+
+fitmm_dream <- dream(mydata, ~ 0 + timepoint + BMI_t0 + Age + activity_sum_rank_scaled + (1|PID), myinfo, L)
+
+fitmm_dream <- eBayes(fitmm_dream)
+
+dream_res <- variancePartition::topTable(fitmm_dream, coef = i, number = Inf, adjust.method = "BH", sort.by = "p", lfc = 0)
+
+dream_res$ionMz <- rownames(dream_res)
+
+print(nrow(dream_res[dream_res$adj.P.Val <=0.05,]))
+
+list_dream_ruraldiet[[i]] <- dream_res
+}
+```
+```{r}
+res_dream_ruraldiet <- do.call(rbind, Map(cbind, comparison = names(list_dream_ruraldiet),list_dream_ruraldiet))
+
+head(res_dream_ruraldiet)
+```
+```{r}
+## add sig
+res_dream_ruraldiet <- as.data.frame(res_dream_ruraldiet %>% add_significance(p.col = "adj.P.Val"))
+```
+
+### step5: calculate paire fc
+
+```{r}
+pairedFC_ruraldiet_diet <- data.frame()
+
+for(i in names(varpart_features_ruraldiet)){
+  print(i)
+  
+  ctr_condition = str_split_fixed(i, "_vs_",2)[,1]
+  test_condition = str_split_fixed(i, "_vs_",2)[,2]
+  
+  print(ctr_condition)
+  print(test_condition)
+  
+  ctrids <- rownames(subset(varpart_features_ruraldiet[[i]]$info, 
+                            as.character(timepoint) == ctr_condition))
+  testids <- rownames(subset(varpart_features_ruraldiet[[i]]$info, 
+                             as.character(timepoint) == test_condition))
+
+  
+  
+  tmpfc <- fcros::fcrosFCmat(varpart_features_ruraldiet[[i]]$data, ctrids, testids, log2.opt = 0)
+
+  tmp_pairedFC <- data.frame(ionMz = tmpfc$idnames, 
+                                       FC = as.numeric(tmpfc$FC), 
+                                       FC2 = as.numeric(tmpfc$FC2))
+
+  tmp_pairedFC$log2FC <- log2(tmp_pairedFC$FC)
+  tmp_pairedFC$log2FC2 <- log2(tmp_pairedFC$FC2)
+
+  tmp_pairedFC$direction <- ifelse(tmp_pairedFC$log2FC2>0,"up",  "down")
+
+  tmp_pairedFC$comparison <- i
+  
+  pairedFC_ruraldiet_diet <- rbind(pairedFC_ruraldiet_diet, tmp_pairedFC)
+}
+```
+### step6: combine dream and paireFC results
+
+```{r}
+### add paired FC
+pairedFC_ruraldiet_diet$merged <- paste0(pairedFC_ruraldiet_diet$ionMz,"_", pairedFC_ruraldiet_diet$comparison)
+
+res_dream_ruraldiet$merged <- paste0(res_dream_ruraldiet$ionMz,"_", res_dream_ruraldiet$comparison)
+
+cols_2_add <- c("FC","FC2","log2FC","log2FC2","direction","merged")
+
+res_dream_ruraldiet <- merge(res_dream_ruraldiet, pairedFC_ruraldiet_diet[,cols_2_add], by = "merged")
+
+res_dream_ruraldiet$regulation <- ifelse(res_dream_ruraldiet$adj.P.Val.signif != "ns" & abs(res_dream_ruraldiet$log2FC2) > log2(fc_threshold), res_dream_ruraldiet$direction, "ns")
+
+rownames(res_dream_ruraldiet) <- res_dream_ruraldiet$merged
+
+res_dream_ruraldiet$CompoundName <- melt_annotation_tal_new[match(as.character(res_dream_ruraldiet$ionMz), as.character(melt_annotation_tal_new$ionMz)),"CompoundName"]
+
+res_dream_ruraldiet$HMDB <- melt_annotation_tal_new[match(as.character(res_dream_ruraldiet$ionMz), as.character(melt_annotation_tal_new$ionMz)),"CompoundID_new"]
+
+res_dream_ruraldiet$label <- ifelse(res_dream_ruraldiet$adj.P.Val.signif !="ns", str_trunc(res_dream_ruraldiet$CompoundName,24),NA)
+
+head(res_dream_ruraldiet)
+```
+
+### step7: list of sig metabolites
+```{r}
+list_sig_dream_ruraldiet_diet <- list()
+
+for(i in unique(res_dream_ruraldiet$comparison)){
+  
+  print(i)
+  
+  list_sig_dream_ruraldiet_diet[[i]] <- split(
+    subset(res_dream_ruraldiet, regulation != "ns" & comparison == i)$ionMz,
+     subset(res_dream_ruraldiet, regulation != "ns" & comparison == i)$regulation
+    )
+  
+}
+
+str(list_sig_dream_ruraldiet_diet)
+```
+```{r}
+list_sig_dream_ruraldiet_diet_name <- list()
+
+for(i in unique(res_dream_ruraldiet$comparison)){
+  
+  print(i)
+  
+  list_sig_dream_ruraldiet_diet_name[[i]] <- split(
+    subset(res_dream_ruraldiet, regulation != "ns" & comparison == i)$CompoundName,
+     subset(res_dream_ruraldiet, regulation != "ns" & comparison == i)$regulation
+    )
+  
+}
+
+str(list_sig_dream_ruraldiet_diet_name)
+```
+```{r}
+list_sig_dream_ruraldiet_diet_hmdb <- list()
+
+for(i in unique(res_dream_ruraldiet$comparison)){
+  
+  print(i)
+  
+  list_sig_dream_ruraldiet_diet_hmdb[[i]] <- split(
+    subset(res_dream_ruraldiet, regulation != "ns" & comparison == i)$HMDB,
+     subset(res_dream_ruraldiet, regulation != "ns" & comparison == i)$regulation
+    )
+  
+}
+
+str(list_sig_dream_ruraldiet_diet_hmdb)
+```
+
+
+### step8: plots
+count
+```{r}
+count_da_ruraldiet <- as.data.frame(res_dream_ruraldiet %>% 
+                                      group_by(comparison) %>% 
+                                      summarize(up = sum(regulation == "up"),
+                                                down = sum(regulation == "down")))
+
+
+count_da_ruraldiet <- reshape2::melt(count_da_ruraldiet)
+
+count_da_ruraldiet
+```
+
+```{r}
+count_da_ruraldiet$comparison <- factor(count_da_ruraldiet$comparison, levels = c("t0_vs_t1","t1_vs_t2","t0_vs_t2"))
+
+ggplot(count_da_ruraldiet, aes(x= comparison, y= value, fill = variable))+
+  geom_bar(stat = "identity",color = "black", position = "stack")+
+  scale_fill_manual(values = c("up" = "tomato3","down" = "cornflowerblue"))+
+  geom_text(vjust = 1, position = position_stack(), aes(label = value))+
+  theme_bw()+
+  ggtitle("Rural diet")+
+  theme(aspect.ratio = 1.5)
+```
+
+
+# =================================
+# 3.3. Mbege
+## data distribution
+```{r}
+data_melt_mbege <- as.data.frame(t(metabo_log2_mbege))
+data_melt_mbege$ID <- rownames(data_melt_mbege)
+
+data_melt_mbege <- reshape2::melt(data_melt_mbege, id.var = "ID")
+data_melt_mbege$timepoint <- sample_table[match(data_melt_mbege$ID, sample_table$ID),"timepoint"]
+data_melt_mbege$PID <- sample_table[match(data_melt_mbege$ID, sample_table$ID),"PID"]
+
+head(data_melt_mbege)
+```
+
+
+# ===================
+
+## Variance partition - MBEGE
+
+
+### step1: find metabolites contributing to more than 5% variation for each time comparison
+```{r}
+form <- ~ Age + (1 | PID) + timepoint_numeric + BMI_t0 + activity_sum_rank_scaled
+
+varpart_features_mbege <- list()
+
+for ( i in c("t0_vs_t1","t1_vs_t2","t0_vs_t2")){
+  tp1 <- str_split_fixed(i,"_vs_",2)[,1]
+  tp2 <- str_split_fixed(i,"_vs_",2)[,2]
+  
+  tmpinfo <- subset(sample_table_mbege, timepoint %in% c(tp1,tp2))
+  
+  ## make timepoint variable into numeric
+  tmpinfo$timepoint_numeric <- as.numeric(gsub("t","",tmpinfo$timepoint))
+  
+  tmpdata <- metabo_log2_mbege[,match(tmpinfo$ID, colnames(metabo_log2_mbege))]
+  
+  if(identical(tmpinfo$ID, colnames(tmpdata))){
+    print("identical")
+  } else{
+    stop("error, info and data samples not ordered correctly")
+  }
+  
+  
+  tmpvarpart <- fitExtractVarPartModel(tmpdata, form, tmpinfo)
+  
+  # sort variables (i.e. columns) by median fraction
+#       of variance explained
+tmpvarpart <- sortCols(tmpvarpart)
+
+varpart_features_mbege[[i]]$varpart <- tmpvarpart
+varpart_features_mbege[[i]]$info <- tmpinfo
+varpart_features_mbege[[i]]$data <- tmpdata
+
+}
+```
+
+### step2: plot results
+```{r}
+## colors 
+colors_vars <- c("Residuals" = "lightgray",
+                 "timepoint_numeric"  = "turquoise",
+                 "Age" = "purple",
+                 "BMI_t0" = "cornflowerblue",
+                 "PID" = "lightyellow",
+                 "activity_sum_rank_scaled" = "tomato3")
+```
+
+```{r}
+list_parvar_plots_mbege <- list()
+
+for (i in names(varpart_features_mbege)){
+  print(i)
+  
+tmp_df <- as.data.frame(varpart_features_mbege[[i]]$varpart)
+tmp_df$ionMz <- rownames(tmp_df)
+tmp_df <- reshape2::melt(tmp_df, id.vars = "ionMz")
+
+timepoint_var <- subset(tmp_df, variable == "timepoint_numeric")$value
+names(timepoint_var) <- as.character(subset(tmp_df, variable == "timepoint_numeric")$ionMz)
+
+tmp_df$timepoint <- timepoint_var[match(tmp_df$ionMz, names(timepoint_var))]
+tmp_df$value100 <- 100*tmp_df$value
+
+## factor
+tmp_df$variable <- factor(tmp_df$variable, levels = rev(c("timepoint_numeric","Age","BMI_t0","activity_sum_rank_scaled", "PID","Residuals")))
+
+
+tmp_df <- tmp_df[order(tmp_df$timepoint, decreasing = T),]
+
+tmp_df$compoundname <- melt_annotation_tal_new[match(as.character(tmp_df$ionMz), as.character( melt_annotation_tal_new$ionMz)),"CompoundID_new"]
+
+# barplot
+tmpplot <- ggplot(subset(tmp_df, timepoint >0.05), aes(x = reorder(compoundname, timepoint), y = value100, fill = variable))+
+  geom_bar(stat = "identity", position = "stack")+
+  coord_flip()+
+  scale_fill_manual(values = colors_vars)+
+ xlab("")+
+  ylab("% Explained variance")+
+  ggtitle("t0vst1 Top contributions (>5%) - timepoint")
+
+
+list_parvar_plots_mbege[["df"]][[i]] <- tmp_df
+list_parvar_plots_mbege[["plot"]][[i]] <- tmpplot
+}
+```
+```{r fig.width=20, fig.height=10}
+wrap_plots(list_parvar_plots_mbege$plot, nrow = 1, guides = "collect")
+```
+
+### step3: extract metabolites contributing >5% for downstream analysis
+```{r}
+for (i in names(list_parvar_plots_mbege$df)){
+  print(i)
+  
+  tmp_df <- NULL
+  
+  tmp_df <- list_parvar_plots_mbege$df[[i]]
+  
+  var_metabo <- unique(tmp_df[tmp_df$timepoint>0.05,"ionMz"])
+
+  print(paste0(round(length(var_metabo)*100/length(unique(tmp_df$ionMz)),digits = 2),"% metabolites taken for analysis for comparison ",i))
+  
+  
+  ## add to varpart_features_mbege
+  varpart_features_mbege[[i]]$vars <- var_metabo
+}
+```
+
+
+
+### step4: perform dream analysis
+```{r}
+list_dream_mbege <- list()
+
+for (i in names(varpart_features_mbege)){
+  print(i)
+  
+  myinfo <- varpart_features_mbege[[i]]$info
+  ## factor for the variables present
+  myinfo$timepoint <- factor(myinfo$timepoint, levels = unique(myinfo$timepoint))
+  
+  mydata <- varpart_features_mbege[[i]]$data
+  ## filter variables
+  mydata <- mydata[which(rownames(mydata) %in% as.character( varpart_features_mbege[[i]]$vars)),]
+  
+  mycontrasts <- c(
+    t0_vs_t1 = "timepointt0 - timepointt1",
+    t0_vs_t2 = "timepointt0 - timepointt2",
+    t1_vs_t2 = "timepointt1 - timepointt2"
+  )
+  
+  
+  L <- makeContrastsDream(~ 0 + timepoint + BMI_t0 + Age + activity_sum_rank_scaled + (1|PID) , myinfo,
+  contrasts = mycontrasts[names(mycontrasts) == i]
+)
+
+# Visualize contrast matrix
+plotContrasts(L)
+
+fitmm_dream <- dream(mydata, ~ 0 + timepoint + BMI_t0 + Age + activity_sum_rank_scaled + (1|PID), myinfo, L)
+
+fitmm_dream <- eBayes(fitmm_dream)
+
+dream_res <- variancePartition::topTable(fitmm_dream, coef = i, number = Inf, adjust.method = "BH", sort.by = "p", lfc = 0)
+
+dream_res$ionMz <- rownames(dream_res)
+
+print(nrow(dream_res[dream_res$adj.P.Val <=0.05,]))
+
+list_dream_mbege[[i]] <- dream_res
+}
+```
+```{r}
+res_dream_mbege <- do.call(rbind, Map(cbind, comparison = names(list_dream_mbege),list_dream_mbege))
+
+head(res_dream_mbege)
+```
+```{r}
+## add sig
+res_dream_mbege <- as.data.frame(res_dream_mbege %>% add_significance(p.col = "adj.P.Val"))
+```
+
+### step5: calculate paire fc
+
+```{r}
+pairedFC_mbege_diet <- data.frame()
+
+for(i in names(varpart_features_mbege)){
+  print(i)
+  
+  ctr_condition = str_split_fixed(i, "_vs_",2)[,1]
+  test_condition = str_split_fixed(i, "_vs_",2)[,2]
+  
+  print(ctr_condition)
+  print(test_condition)
+  
+  ctrids <- rownames(subset(varpart_features_mbege[[i]]$info, 
+                            as.character(timepoint) == ctr_condition))
+  testids <- rownames(subset(varpart_features_mbege[[i]]$info, 
+                             as.character(timepoint) == test_condition))
+
+  
+  
+  tmpfc <- fcros::fcrosFCmat(varpart_features_mbege[[i]]$data, ctrids, testids, log2.opt = 0)
+
+  tmp_pairedFC <- data.frame(ionMz = tmpfc$idnames, 
+                                       FC = as.numeric(tmpfc$FC), 
+                                       FC2 = as.numeric(tmpfc$FC2))
+
+  tmp_pairedFC$log2FC <- log2(tmp_pairedFC$FC)
+  tmp_pairedFC$log2FC2 <- log2(tmp_pairedFC$FC2)
+
+  tmp_pairedFC$direction <- ifelse(tmp_pairedFC$log2FC2>0,"up",  "down")
+
+  tmp_pairedFC$comparison <- i
+  
+  pairedFC_mbege_diet <- rbind(pairedFC_mbege_diet, tmp_pairedFC)
+}
+```
+### step6: combine dream and paireFC results
+
+```{r}
+### add paired FC
+pairedFC_mbege_diet$merged <- paste0(pairedFC_mbege_diet$ionMz,"_", pairedFC_mbege_diet$comparison)
+
+res_dream_mbege$merged <- paste0(res_dream_mbege$ionMz,"_", res_dream_mbege$comparison)
+
+cols_2_add <- c("FC","FC2","log2FC","log2FC2","direction","merged")
+
+res_dream_mbege <- merge(res_dream_mbege, pairedFC_mbege_diet[,cols_2_add], by = "merged")
+
+res_dream_mbege$regulation <- ifelse(res_dream_mbege$adj.P.Val.signif != "ns" & abs(res_dream_mbege$log2FC2) > log2(fc_threshold), res_dream_mbege$direction, "ns")
+
+rownames(res_dream_mbege) <- res_dream_mbege$merged
+
+res_dream_mbege$CompoundName <- melt_annotation_tal_new[match(as.character(res_dream_mbege$ionMz), as.character(melt_annotation_tal_new$ionMz)),"CompoundName"]
+
+res_dream_mbege$HMDB <- melt_annotation_tal_new[match(as.character(res_dream_mbege$ionMz), as.character(melt_annotation_tal_new$ionMz)),"CompoundID_new"]
+
+res_dream_mbege$label <- ifelse(res_dream_mbege$adj.P.Val.signif !="ns", str_trunc(res_dream_mbege$CompoundName,24),NA)
+
+head(res_dream_mbege)
+```
+
+### step7: list of sig metabolites
+```{r}
+list_sig_dream_mbege_diet <- list()
+
+for(i in unique(res_dream_mbege$comparison)){
+  
+  print(i)
+  
+  list_sig_dream_mbege_diet[[i]] <- split(
+    subset(res_dream_mbege, regulation != "ns" & comparison == i)$ionMz,
+     subset(res_dream_mbege, regulation != "ns" & comparison == i)$regulation
+    )
+  
+}
+
+str(list_sig_dream_mbege_diet)
+```
+```{r}
+list_sig_dream_mbege_diet_name <- list()
+
+for(i in unique(res_dream_mbege$comparison)){
+  
+  print(i)
+  
+  list_sig_dream_mbege_diet_name[[i]] <- split(
+    subset(res_dream_mbege, regulation != "ns" & comparison == i)$CompoundName,
+     subset(res_dream_mbege, regulation != "ns" & comparison == i)$regulation
+    )
+  
+}
+
+str(list_sig_dream_mbege_diet_name)
+```
+```{r}
+list_sig_dream_mbege_diet_hmdb <- list()
+
+for(i in unique(res_dream_mbege$comparison)){
+  
+  print(i)
+  
+  list_sig_dream_mbege_diet_hmdb[[i]] <- split(
+    subset(res_dream_mbege, regulation != "ns" & comparison == i)$HMDB,
+     subset(res_dream_mbege, regulation != "ns" & comparison == i)$regulation
+    )
+  
+}
+
+str(list_sig_dream_mbege_diet_hmdb)
+```
+
+
+### step8: plots
+count
+```{r}
+count_da_mbege <- as.data.frame(res_dream_mbege %>% 
+                                      group_by(comparison) %>% 
+                                      summarize(up = sum(regulation == "up"),
+                                                down = sum(regulation == "down")))
+
+
+count_da_mbege <- reshape2::melt(count_da_mbege)
+
+count_da_mbege
+```
+
+```{r}
+count_da_mbege$comparison <- factor(count_da_mbege$comparison, levels = c("t0_vs_t1","t1_vs_t2","t0_vs_t2"))
+
+ggplot(count_da_mbege, aes(x= comparison, y= value, fill = variable))+
+  geom_bar(stat = "identity",color = "black", position = "stack")+
+  scale_fill_manual(values = c("up" = "tomato3","down" = "cornflowerblue"))+
+  geom_text(vjust = 1, position = position_stack(), aes(label = value))+
+  theme_bw()+
+  ggtitle("Mbege")+
+  theme(aspect.ratio = 1.5)
+```
+# ========================================
+
+
+## Export metabolites names and analysis metabolites
+```{r}
+## urban diet
+tmp_analysis_urban <- lapply(varpart_features_urbandiet, "[[","vars")
+tmp_analysis_urban<-ComplexHeatmap::list_to_matrix(tmp_analysis_urban)
+colnames(tmp_analysis_urban) <- paste0("WD: ",colnames(tmp_analysis_urban))
+
+
+## rural diet
+tmp_analysis_rural <- lapply(varpart_features_ruraldiet, "[[","vars")
+tmp_analysis_rural<-ComplexHeatmap::list_to_matrix(tmp_analysis_rural)
+colnames(tmp_analysis_rural) <- paste0("TD: ",colnames(tmp_analysis_rural))
+
+## Mbege
+tmp_analysis_mbege <- lapply(varpart_features_mbege, "[[","vars")
+tmp_analysis_mbege<-ComplexHeatmap::list_to_matrix(tmp_analysis_mbege)
+colnames(tmp_analysis_mbege) <- paste0("Fermented: ",colnames(tmp_analysis_mbege))
+
+## all
+
+tmp_analysis_metabolites <- merge(tmp_analysis_urban, tmp_analysis_rural, by = "row.names", all.x = T, all.y = T)
+rownames(tmp_analysis_metabolites) <- tmp_analysis_metabolites$Row.names
+tmp_analysis_metabolites$Row.names <- NULL
+
+tmp_analysis_metabolites <- merge(tmp_analysis_metabolites, tmp_analysis_mbege, by = "row.names", all.x = T, all.y = T)
+rownames(tmp_analysis_metabolites) <- tmp_analysis_metabolites$Row.names
+tmp_analysis_metabolites$Row.names <- NULL
+
+## replace 1 with X and NA or 0 with ""
+tmp_analysis_metabolites[tmp_analysis_metabolites == 1] <- "X"
+tmp_analysis_metabolites[tmp_analysis_metabolites == 0] <- ""
+tmp_analysis_metabolites[is.na(tmp_analysis_metabolites)] <- ""
+
+## add annotation
+tmp_analysis_metabolites$compoundName <- melt_annotation_tal_new[match(rownames(tmp_analysis_metabolites), as.character( melt_annotation_tal_new$ionMz)),"CompoundName"]
+tmp_analysis_metabolites$ionMz <- rownames(tmp_analysis_metabolites)
+tmp_analysis_metabolites$HMDB_ID <- melt_annotation_tal_new[match(rownames(tmp_analysis_metabolites), as.character( melt_annotation_tal_new$ionMz)),"CompoundID_new"]
+
+head(tmp_analysis_metabolites)
+```
+
+
+#-------------------------------------
+## Combine all results dream: Diets
+### .. combine rea_dream tables
+```{r}
+res_dream_all <- list(urban_diet = res_dream_urbandiet, 
+                      rural_diet = res_dream_ruraldiet, 
+                      MBEGE = res_dream_mbege)
+```
+```{r}
+res_dream_all <- do.call(rbind, Map(cbind, diet = names(res_dream_all), res_dream_all))
+
+head(res_dream_all)
+```
+### ... add chemical class
+##### .... chemical class
+```{r}
+tmpinput <- paste0("hmdb:", unique(res_dream_all$HMDB))
+rampdb__all_class <- Getchemclass_RAMPdb(hmdbinput =  tmpinput)
+
+length(tmpinput)
+rampdb__all_class$HMDB <- gsub("hmdb:","", rampdb__all_class$sourceId)
+length(unique(rampdb__all_class$sourceId))
+head(rampdb__all_class)
+```
+```{r}
+rampdb__all_class_ClassyFire_class <- subset(rampdb__all_class, class_level_name == "ClassyFire_super_class")
+
+res_dream_all$class_name <- rampdb__all_class_ClassyFire_class[match(res_dream_all$HMDB, rampdb__all_class_ClassyFire_class$HMDB),"class_name"]
+
+head(res_dream_all[,c("HMDB","class_name")])
+```
+
+
+# =========================================
+
+# 4. Plot all sig metabolites together
+
+## 4.1. All sig metabolites
+##### ... all sig df
+```{r}
+all_sig_df <- subset(res_dream_all, regulation != "ns")
+head(all_sig_df)
+```
+
+
+
+
+##### ... all sig list
+```{r}
+
+all_sig_hmdb <- unique(subset(all_sig_df, regulation != "ns")$HMDB)
+
+str(all_sig_hmdb)
+```
+```{r}
+all_sig_ionMz <- subset(all_sig_df, regulation != "ns")
+
+all_sig_ionMz <- split(all_sig_ionMz$ionMz, all_sig_ionMz$diet)
+
+str(all_sig_ionMz)
+```
+## 4.2. annotation
+```{r}
+anno_pathways <- data.frame()
+for (i in unique(res_dream_all$diet)){
+  print(i)
+  
+  for (j in unique(res_dream_all$comparison)){
+    dfup <- Getpathway_RAMPdb(hmdbinput = paste0("hmdb:", unique(subset(res_dream_all, diet == i & comparison == j & regulation == "up")$HMDB)))
+    dfup$regulation <- "up"
+    
+  dfdown <- Getpathway_RAMPdb(hmdbinput = paste0("hmdb:", unique(subset(res_dream_all, diet == i & comparison == j & regulation == "down")$HMDB)))
+  dfdown$regulation <- "down"
+  
+  tmpdf <- rbind(dfup, dfdown)
+  tmpdf$comparison <- j
+  tmpdf$diet <- i
+  
+  anno_pathways<- rbind(anno_pathways, tmpdf)
+  }
+
+}
+
+
+head(anno_pathways)
+```
+
+
+## traingle plots of top metabolites
+```{r}
+## label top 5
+labels1 <- subset(res_dream_all, regulation != "ns" & !(CompoundName %in% c("Paracetamol sulfate","Dihydroisomorphine-3-glucuronide"))) %>%
+  group_by(diet, comparison, direction) %>%
+  slice_max(abs(log2FC2), n = 8) %>%
+  mutate(label = CompoundName)
+
+labels2 <- subset(res_dream_all, regulation != "ns" & !(CompoundName %in% c("Paracetamol sulfate","Dihydroisomorphine-3-glucuronide"))) %>%
+  group_by(diet, comparison, direction) %>%
+  slice_min(abs(adj.P.Val), n = 6) %>%
+  mutate(label = CompoundName)
+
+labels <- as.data.frame(rbind(labels1, labels2))
+
+
+labels$ionMz_comp_diet <- paste0(labels$ionMz,"_", labels$comparison,"_", labels$diet)
+
+labels <- labels[!duplicated(labels$ionMz_comp_diet),]
+
+
+head(labels)
+
+
+```
+
+```{r fig.width=15, fig.height=8}
+plotdf <- subset(res_dream_all, regulation !="ns") 
+
+plotdf$diet <- factor(plotdf$diet, levels = c("urban_diet","rural_diet","MBEGE"))
+
+plotdf$ionMz_comp_diet <- paste0(plotdf$ionMz,"_", plotdf$comparison, "_", plotdf$diet)
+
+labels_manuscript <- c("")
+
+plotdf$label <- labels[match(plotdf$ionMz_comp_diet, labels$ionMz_comp_diet),"label"]
+
+## keep only labels that are not NA
+plotdf <- subset(plotdf, !is.na(label))
+
+plotdf$label_tranc <- str_trunc(plotdf$label,24)
+
+plotdf$comparison <- factor(plotdf$comparison, levels = c("t0_vs_t1","t1_vs_t2","t0_vs_t2"))
+
+#plotdf$y <- str_trunc(plotdf$CompoundName,18)
+
+max.val <- round(max(abs(plotdf$log2FC2), na.rm = T),1)*1.2
+
+plotdf$class_name <- factor(plotdf$class_name, levels = unique(plotdf$class_name))
+
+
+
+plotdf <- plotdf[order(plotdf$class_name),]
+
+plotdf$class_numeric <- as.numeric(plotdf$class_name)
+
+## replace NA with the highest number
+plotdf[is.na(plotdf$class_numeric),"class_numeric"] <- (max(plotdf$class_numeric, na.rm = T)+1)
+
+plotdf <- plotdf[order(plotdf$log2FC2, decreasing = T),]
+
+plotdf$pathway <- anno_pathways[match(plotdf$HMDB, gsub("hmdb:","",anno_pathways$inputId)),"pathwayName"]
+
+plotdf$anno <- ifelse(is.na(plotdf$pathway),as.character(plotdf$class_name), plotdf$pathway)
+
+ colors_class <- RColorBrewer::brewer.pal(n = 12, "Paired")
+
+ names(colors_class) <- unique(plotdf$class_name)
+
+## ===============
+
+# urban diet
+p1_urbandiet <- 
+  ggplot(subset(plotdf, diet == "urban_diet") , aes(x= comparison, y= reorder(label_tranc, -class_numeric)))+
+  geom_point(aes(shape = regulation, fill = log2FC2), size = 3)+
+   scale_shape_manual(values = c("up" = 24, "down" = 25))+
+  geom_text(aes(label = adj.P.Val.signif))+
+  scale_fill_gradientn(colours = c("blue","white","red"), 
+                       limits = c(-max.val, max.val),
+                       guide = guide_colorbar(frame.colour = "black", 
+                                              ticks.colour = "black"))+
+  theme_bw()+ggtitle("Urban diet")+
+  theme(axis.title = element_blank(), axis.ticks.y = element_blank(), axis.text.y = element_blank())
+
+p2_urbandiet <-  
+  ggplot(subset(plotdf, diet == "urban_diet"), aes(x= "class", y= reorder(label_tranc, -class_numeric), fill = class_name))+
+  geom_tile()+
+  theme_void()+
+  theme(axis.text.y = element_text())+
+  scale_fill_manual(values = colors_class, na.value = "gray88")
+
+## ===============
+
+# rural diet
+p1_ruraldiet <-  
+  ggplot(subset(plotdf, diet == "rural_diet"), aes(x= comparison, y= reorder(label_tranc, -class_numeric)))+
+  geom_point(aes(shape = regulation, fill = log2FC2), size = 3)+
+   scale_shape_manual(values = c("up" = 24, "down" = 25))+
+  geom_text(aes(label = adj.P.Val.signif))+
+  scale_fill_gradientn(colours = c("blue","white","red"), 
+                       limits = c(-max.val, max.val),
+                       guide = guide_colorbar(frame.colour = "black", 
+                                              ticks.colour = "black"))+
+  theme_bw()+ggtitle("Rural diet")+
+  theme(axis.title = element_blank(), axis.ticks.y = element_blank(), axis.text.y = element_blank())
+
+p2_ruraldiet <-  
+  ggplot(subset(plotdf, diet == "rural_diet"), aes(x= "class", y= reorder(label_tranc, -class_numeric), fill = class_name))+
+  geom_tile()+
+  theme_void()+
+  theme(axis.text.y = element_text())+
+  scale_fill_manual(values = colors_class, na.value = "gray88")
+
+## ===============
+
+# Mbege
+p1_mbege <- 
+  ggplot(subset(plotdf, diet == "MBEGE"), aes(x= comparison, y= reorder(label_tranc, -class_numeric)))+
+  geom_point(aes(shape = regulation, fill = log2FC2), size = 3)+
+   scale_shape_manual(values = c("up" = 24, "down" = 25))+
+  geom_text(aes(label = adj.P.Val.signif))+
+  scale_fill_gradientn(colours = c("blue","white","red"), 
+                       limits = c(-max.val, max.val),
+                       guide = guide_colorbar(frame.colour = "black", 
+                                              ticks.colour = "black"))+
+  theme_bw()+ggtitle("Mbege")+
+  theme(axis.title = element_blank(), axis.ticks.y = element_blank(), axis.text.y = element_blank())
+
+p2_mbege <-  
+  ggplot(subset(plotdf, diet == "MBEGE"), aes(x= "class", y= reorder(label_tranc,-class_numeric), fill = class_name))+
+  geom_tile()+
+  theme_void()+
+  theme(axis.text.y = element_text())+
+  scale_fill_manual(values = colors_class, na.value = "gray88")
+
+p2_urbandiet + p1_urbandiet + p2_ruraldiet + p1_ruraldiet + p2_mbege + p1_mbege + plot_layout(nrow = 1, ncol = 6, widths = c(0.1, 3,0.1, 3, 0.1, 3 ), guides = "collect")
+
+
+
+
+```
+
+
+
+```{r fig.width=15, fig.height=8}
+plotdf <- subset(res_dream_all, regulation !="ns") 
+
+plotdf$diet <- factor(plotdf$diet, levels = c("urban_diet","rural_diet","MBEGE"))
+
+plotdf$ionMz_comp_diet <- paste0(plotdf$ionMz,"_", plotdf$comparison, "_", plotdf$diet)
+
+labels_manuscript <- c("")
+
+plotdf$label <- labels[match(plotdf$ionMz_comp_diet, labels$ionMz_comp_diet),"label"]
+
+## keep only labels that are not NA
+plotdf <- subset(plotdf, !is.na(label))
+
+plotdf$label_tranc <- str_trunc(plotdf$label,24)
+
+plotdf$comparison <- factor(plotdf$comparison, levels = c("t0_vs_t1","t1_vs_t2","t0_vs_t2"))
+
+#plotdf$y <- str_trunc(plotdf$CompoundName,18)
+
+max.val <- round(max(abs(plotdf$log2FC2), na.rm = T),1)*1.2
+
+plotdf$class_name <- factor(plotdf$class_name, levels = unique(plotdf$class_name))
+
+
+
+plotdf <- plotdf[order(plotdf$class_name),]
+
+plotdf$class_numeric <- as.numeric(plotdf$class_name)
+
+## replace NA with the highest number
+plotdf[is.na(plotdf$class_numeric),"class_numeric"] <- (max(plotdf$class_numeric, na.rm = T)+1)
+
+plotdf <- plotdf[order(plotdf$log2FC2, decreasing = T),]
+## ===============
+
+# urban diet
+p1_urbandiet <- 
+  ggplot(subset(plotdf, diet == "urban_diet") , aes(x= comparison, y= reorder(HMDB, -class_numeric)))+
+  geom_point(aes(shape = regulation, fill = log2FC2), size = 4)+
+   scale_shape_manual(values = c("up" = 24, "down" = 25))+
+  geom_text(aes(label = adj.P.Val.signif))+
+  scale_fill_gradientn(colours = c("blue","white","red"), 
+                       limits = c(-max.val, max.val),
+                       guide = guide_colorbar(frame.colour = "black", 
+                                              ticks.colour = "black"))+
+  theme_bw()+ggtitle("Urban diet")+
+  theme(axis.title = element_blank(), axis.ticks.y = element_blank(), axis.text.y = element_blank())
+
+p2_urbandiet <-  
+  ggplot(subset(plotdf, diet == "urban_diet"), aes(x= "class", y= reorder(HMDB, -class_numeric), fill = class_name))+
+  geom_tile()+
+  theme_void()+
+  theme(axis.text.y = element_text())
+
+## ===============
+
+# rural diet
+p1_ruraldiet <-  
+  ggplot(subset(plotdf, diet == "rural_diet"), aes(x= comparison, y= reorder(HMDB, -class_numeric)))+
+  geom_point(aes(shape = regulation, fill = log2FC2), size = 4)+
+   scale_shape_manual(values = c("up" = 24, "down" = 25))+
+  geom_text(aes(label = adj.P.Val.signif))+
+  scale_fill_gradientn(colours = c("blue","white","red"), 
+                       limits = c(-max.val, max.val),
+                       guide = guide_colorbar(frame.colour = "black", 
+                                              ticks.colour = "black"))+
+  theme_bw()+ggtitle("Rural diet")+
+  theme(axis.title = element_blank(), axis.ticks.y = element_blank(), axis.text.y = element_blank())
+
+p2_ruraldiet <-  
+  ggplot(subset(plotdf, diet == "rural_diet"), aes(x= "class", y= reorder(HMDB, -class_numeric), fill = class_name))+
+  geom_tile()+
+  theme_void()+
+  theme(axis.text.y = element_text())
+
+## ===============
+
+# Mbege
+p1_mbege <- 
+  ggplot(subset(plotdf, diet == "MBEGE"), aes(x= comparison, y= reorder(HMDB, -class_numeric)))+
+  geom_point(aes(shape = regulation, fill = log2FC2), size = 4)+
+   scale_shape_manual(values = c("up" = 24, "down" = 25))+
+  geom_text(aes(label = adj.P.Val.signif))+
+  scale_fill_gradientn(colours = c("blue","white","red"), 
+                       limits = c(-max.val, max.val),
+                       guide = guide_colorbar(frame.colour = "black", 
+                                              ticks.colour = "black"))+
+  theme_bw()+ggtitle("Mbege")+
+  theme(axis.title = element_blank(), axis.ticks.y = element_blank(), axis.text.y = element_blank())
+
+p2_mbege <-  
+  ggplot(subset(plotdf, diet == "MBEGE"), aes(x= "class", y= reorder(HMDB,-class_numeric), fill = class_name))+
+  geom_tile()+
+  theme_void()+
+  theme(axis.text.y = element_text())
+
+p2_urbandiet + p1_urbandiet + p2_ruraldiet + p1_ruraldiet + p2_mbege + p1_mbege + plot_layout(nrow = 1, ncol = 6, widths = c(0.1, 3,0.1, 3, 0.1, 3 ), guides = "collect")
+```
+### DE by class
+```{r}
+plotdf <- subset(res_dream_all, regulation !="ns") 
+
+## create colors vector -----------------------------------
+names_class_all <- c(unique(plotdf$class_name))
+names(names_class_all) <- colors_class[match(names_class_all, names(colors_class))]
+
+names(names_class_all)[is.na(names(names_class_all))] <- RColorBrewer::brewer.pal(n = 12, "Set2")
+
+colors_class2 <- names(names_class_all)
+names(colors_class2) <- names_class_all
+
+
+## factor variables ----------------------------------------
+plotdf$diet <- factor(plotdf$diet, levels = c("urban_diet","rural_diet","MBEGE"))
+
+ggplot(plotdf, aes(x= diet, fill = class_name))+
+  geom_bar(stat = "count", color = "black")+
+  scale_fill_manual(values = colors_class2)
+
+
+ggplot(plotdf, aes(x= diet, fill = class_name))+
+  geom_bar(stat = "count", color = "black", position = "fill")+
+  scale_fill_manual(values = colors_class2)
+
+ggplot(plotdf, aes(x= diet, fill = class_name))+
+  geom_bar(stat = "count", color = "black", position = "fill")+
+  scale_fill_manual(values = colors_class2)+
+  coord_polar(theta = "y")+
+  facet_wrap(.~diet, scales = "free")+
+  theme_void()+border()
+```
+
+
+# =====================================
+# 5. Controls
+
+## 5.1. Rural controls
+### PCA Rural controls
+```{r}
+sample_table_urbandiet.ctr <- subset(sample_table, diet == "controls_r")
+rownames(sample_table_urbandiet.ctr) <- sample_table_urbandiet.ctr$ID
+
+metabo_log2_urbandiet.ctr <-metabo_log2[,match(sample_table_urbandiet.ctr$ID, colnames(metabo_log2))]
+
+identical(sample_table_urbandiet.ctr$ID, colnames(metabo_log2_urbandiet.ctr))
+
+pca.urbandiet.ctr <- plotPCAnew(pca_input = metabo_log2_urbandiet.ctr, 
+           ntop = "all", Scale = T,
+           xPC = 1, yPC = 2, point_size = 4, 
+           anno_colour = col_timepoint,  anno= sample_table_urbandiet.ctr, 
+           color = "timepoint", color.ellipse = T, title = "urban diet controls (rural controls)")+border() + theme_bw()+ theme(aspect.ratio = 1)
+
+pca.urbandiet.ctr
+```
+
+
+## DREAM analysis: controls_r
+## Variance partition - rural controls
+
+### step1: find metabolites contributing to more than 5% variation for each time comparison
+```{r}
+form <- ~ Age + (1 | PID) + timepoint_numeric + BMI_t0 + activity_sum_rank_scaled
+
+varpart_features_urbandiet.ctr <- list()
+
+for ( i in c("t0_vs_t1","t1_vs_t2","t0_vs_t2")){
+  tp1 <- str_split_fixed(i,"_vs_",2)[,1]
+  tp2 <- str_split_fixed(i,"_vs_",2)[,2]
+  
+  tmpinfo <- subset(sample_table_urbandiet.ctr, timepoint %in% c(tp1,tp2))
+  
+  ## make timepoint variable into numeric
+  tmpinfo$timepoint_numeric <- as.numeric(gsub("t","",tmpinfo$timepoint))
+  
+  tmpdata <- metabo_log2_urbandiet.ctr[,match(tmpinfo$ID, colnames(metabo_log2_urbandiet.ctr))]
+  
+  if(identical(tmpinfo$ID, colnames(tmpdata))){
+    print("identical")
+  } else{
+    stop("error, info and data samples not ordered correctly")
+  }
+  
+  
+  tmpvarpart <- fitExtractVarPartModel(tmpdata, form, tmpinfo)
+  
+  # sort variables (i.e. columns) by median fraction
+#       of variance explained
+tmpvarpart <- sortCols(tmpvarpart)
+
+varpart_features_urbandiet.ctr[[i]]$varpart <- tmpvarpart
+varpart_features_urbandiet.ctr[[i]]$info <- tmpinfo
+varpart_features_urbandiet.ctr[[i]]$data <- tmpdata
+
+}
+```
+
+### step2: plot results
+```{r}
+## colors 
+colors_vars <- c("Residuals" = "lightgray",
+                 "timepoint_numeric"  = "turquoise",
+                 "Age" = "purple",
+                 "BMI_t0" = "cornflowerblue",
+                 "PID" = "lightyellow",
+                 "activity_sum_rank_scaled" = "tomato3")
+```
+
+```{r}
+list_parvar_plots_urbandiet.ctr <- list()
+
+for (i in names(varpart_features_urbandiet.ctr)){
+  print(i)
+  
+tmp_df <- as.data.frame(varpart_features_urbandiet.ctr[[i]]$varpart)
+tmp_df$ionMz <- rownames(tmp_df)
+tmp_df <- reshape2::melt(tmp_df, id.vars = "ionMz")
+
+timepoint_var <- subset(tmp_df, variable == "timepoint_numeric")$value
+names(timepoint_var) <- as.character(subset(tmp_df, variable == "timepoint_numeric")$ionMz)
+
+tmp_df$timepoint <- timepoint_var[match(tmp_df$ionMz, names(timepoint_var))]
+tmp_df$value100 <- 100*tmp_df$value
+
+## factor
+tmp_df$variable <- factor(tmp_df$variable, levels = rev(c("timepoint_numeric","Age","BMI_t0","activity_sum_rank_scaled", "PID","Residuals")))
+
+
+tmp_df <- tmp_df[order(tmp_df$timepoint, decreasing = T),]
+
+tmp_df$compoundname <- melt_annotation_tal_new[match(as.character(tmp_df$ionMz), as.character( melt_annotation_tal_new$ionMz)),"CompoundID_new"]
+
+# barplot
+tmpplot <- ggplot(subset(tmp_df, timepoint >0.05), aes(x = reorder(compoundname, timepoint), y = value100, fill = variable))+
+  geom_bar(stat = "identity", position = "stack")+
+  coord_flip()+
+  scale_fill_manual(values = colors_vars)+
+ xlab("")+
+  ylab("% Explained variance")+
+  ggtitle("t0vst1 Top contributions (>5%) - timepoint")
+
+
+list_parvar_plots_urbandiet.ctr[["df"]][[i]] <- tmp_df
+list_parvar_plots_urbandiet.ctr[["plot"]][[i]] <- tmpplot
+}
+```
+```{r fig.width=20, fig.height=10}
+wrap_plots(list_parvar_plots_urbandiet.ctr$plot, nrow = 1, guides = "collect")
+```
+
+### step3: extract metabolites contributing >5% for downstream analysis
+```{r}
+for (i in names(list_parvar_plots_urbandiet.ctr$df)){
+  print(i)
+  
+  tmp_df <- NULL
+  
+  tmp_df <- list_parvar_plots_urbandiet.ctr$df[[i]]
+  
+  var_metabo <- unique(tmp_df[tmp_df$timepoint>0.05,"ionMz"])
+
+  print(paste0(round(length(var_metabo)*100/length(unique(tmp_df$ionMz)),digits = 2),"% metabolites taken for analysis for comparison ",i))
+  
+  
+  ## add to varpart_features_urbandiet.ctr
+  varpart_features_urbandiet.ctr[[i]]$vars <- var_metabo
+}
+```
+
+
+
+### step4: perform dream analysis
+```{r}
+list_dream_urbandiet.ctr <- list()
+
+for (i in names(varpart_features_urbandiet.ctr)){
+  print(i)
+  
+  myinfo <- varpart_features_urbandiet.ctr[[i]]$info
+  ## factor for the variables present
+  myinfo$timepoint <- factor(myinfo$timepoint, levels = unique(myinfo$timepoint))
+  
+  mydata <- varpart_features_urbandiet.ctr[[i]]$data
+  ## filter variables
+  mydata <- mydata[which(rownames(mydata) %in% as.character( varpart_features_urbandiet.ctr[[i]]$vars)),]
+  
+  mycontrasts <- c(
+    t0_vs_t1 = "timepointt0 - timepointt1",
+    t0_vs_t2 = "timepointt0 - timepointt2",
+    t1_vs_t2 = "timepointt1 - timepointt2"
+  )
+  
+  
+  L <- makeContrastsDream(~ 0 + timepoint + BMI_t0 + Age + activity_sum_rank_scaled + (1|PID) , myinfo,
+  contrasts = mycontrasts[names(mycontrasts) == i]
+)
+
+# Visualize contrast matrix
+plotContrasts(L)
+
+fitmm_dream <- dream(mydata, ~ 0 + timepoint + BMI_t0 + Age + activity_sum_rank_scaled + (1|PID), myinfo, L)
+
+fitmm_dream <- eBayes(fitmm_dream)
+
+dream_res <- variancePartition::topTable(fitmm_dream, coef = i, number = Inf, adjust.method = "BH", sort.by = "p", lfc = 0)
+
+dream_res$ionMz <- rownames(dream_res)
+
+print(nrow(dream_res[dream_res$adj.P.Val <=0.05,]))
+
+list_dream_urbandiet.ctr[[i]] <- dream_res
+}
+```
+```{r}
+res_dream_urbandiet.ctr <- do.call(rbind, Map(cbind, comparison = names(list_dream_urbandiet.ctr),list_dream_urbandiet.ctr))
+
+head(res_dream_urbandiet.ctr)
+```
+```{r}
+## add sig
+res_dream_urbandiet.ctr <- as.data.frame(res_dream_urbandiet.ctr %>% add_significance(p.col = "adj.P.Val"))
+```
+
+### step5: calculate paire fc
+
+```{r}
+pairedFC_urbandiet.ctr_diet <- data.frame()
+
+for(i in names(varpart_features_urbandiet.ctr)){
+  print(i)
+  
+  ctr_condition = str_split_fixed(i, "_vs_",2)[,1]
+  test_condition = str_split_fixed(i, "_vs_",2)[,2]
+  
+  print(ctr_condition)
+  print(test_condition)
+  
+  ctrids <- rownames(subset(varpart_features_urbandiet.ctr[[i]]$info, 
+                            as.character(timepoint) == ctr_condition))
+  testids <- rownames(subset(varpart_features_urbandiet.ctr[[i]]$info, 
+                             as.character(timepoint) == test_condition))
+
+  
+  
+  tmpfc <- fcros::fcrosFCmat(varpart_features_urbandiet.ctr[[i]]$data, ctrids, testids, log2.opt = 0)
+
+  tmp_pairedFC <- data.frame(ionMz = tmpfc$idnames, 
+                                       FC = as.numeric(tmpfc$FC), 
+                                       FC2 = as.numeric(tmpfc$FC2))
+
+  tmp_pairedFC$log2FC <- log2(tmp_pairedFC$FC)
+  tmp_pairedFC$log2FC2 <- log2(tmp_pairedFC$FC2)
+
+  tmp_pairedFC$direction <- ifelse(tmp_pairedFC$log2FC2>0,"up",  "down")
+
+  tmp_pairedFC$comparison <- i
+  
+  pairedFC_urbandiet.ctr_diet <- rbind(pairedFC_urbandiet.ctr_diet, tmp_pairedFC)
+}
+```
+### step6: combine dream and paireFC results
+
+```{r}
+### add paired FC
+pairedFC_urbandiet.ctr_diet$merged <- paste0(pairedFC_urbandiet.ctr_diet$ionMz,"_", pairedFC_urbandiet.ctr_diet$comparison)
+
+res_dream_urbandiet.ctr$merged <- paste0(res_dream_urbandiet.ctr$ionMz,"_", res_dream_urbandiet.ctr$comparison)
+
+cols_2_add <- c("FC","FC2","log2FC","log2FC2","direction","merged")
+
+res_dream_urbandiet.ctr <- merge(res_dream_urbandiet.ctr, pairedFC_urbandiet.ctr_diet[,cols_2_add], by = "merged")
+
+res_dream_urbandiet.ctr$regulation <- ifelse(res_dream_urbandiet.ctr$adj.P.Val.signif != "ns" & abs(res_dream_urbandiet.ctr$log2FC2) > log2(fc_threshold), res_dream_urbandiet.ctr$direction, "ns")
+
+rownames(res_dream_urbandiet.ctr) <- res_dream_urbandiet.ctr$merged
+
+res_dream_urbandiet.ctr$CompoundName <- melt_annotation_tal_new[match(as.character(res_dream_urbandiet.ctr$ionMz), as.character(melt_annotation_tal_new$ionMz)),"CompoundName"]
+
+res_dream_urbandiet.ctr$HMDB <- melt_annotation_tal_new[match(as.character(res_dream_urbandiet.ctr$ionMz), as.character(melt_annotation_tal_new$ionMz)),"CompoundID_new"]
+
+res_dream_urbandiet.ctr$label <- ifelse(res_dream_urbandiet.ctr$adj.P.Val.signif !="ns", str_trunc(res_dream_urbandiet.ctr$CompoundName,24),NA)
+
+head(res_dream_urbandiet.ctr)
+```
+
+### step7: list of sig metabolites
+```{r}
+list_sig_dream_urbandiet.ctr_diet <- list()
+
+for(i in unique(res_dream_urbandiet.ctr$comparison)){
+  
+  print(i)
+  
+  list_sig_dream_urbandiet.ctr_diet[[i]] <- split(
+    subset(res_dream_urbandiet.ctr, regulation != "ns" & comparison == i)$ionMz,
+     subset(res_dream_urbandiet.ctr, regulation != "ns" & comparison == i)$regulation
+    )
+  
+}
+
+str(list_sig_dream_urbandiet.ctr_diet)
+```
+```{r}
+list_sig_dream_urbandiet.ctr_diet_name <- list()
+
+for(i in unique(res_dream_urbandiet.ctr$comparison)){
+  
+  print(i)
+  
+  list_sig_dream_urbandiet.ctr_diet_name[[i]] <- split(
+    subset(res_dream_urbandiet.ctr, regulation != "ns" & comparison == i)$CompoundName,
+     subset(res_dream_urbandiet.ctr, regulation != "ns" & comparison == i)$regulation
+    )
+  
+}
+
+str(list_sig_dream_urbandiet.ctr_diet_name)
+```
+```{r}
+list_sig_dream_urbandiet.ctr_diet_hmdb <- list()
+
+for(i in unique(res_dream_urbandiet.ctr$comparison)){
+  
+  print(i)
+  
+  list_sig_dream_urbandiet.ctr_diet_hmdb[[i]] <- split(
+    subset(res_dream_urbandiet.ctr, regulation != "ns" & comparison == i)$HMDB,
+     subset(res_dream_urbandiet.ctr, regulation != "ns" & comparison == i)$regulation
+    )
+  
+}
+
+str(list_sig_dream_urbandiet.ctr_diet_hmdb)
+```
+
+
+### step8: plots
+count
+```{r}
+count_da_urbandiet.ctr <- as.data.frame(res_dream_urbandiet.ctr %>% 
+                                      group_by(comparison) %>% 
+                                      summarize(up = sum(regulation == "up"),
+                                                down = sum(regulation == "down")))
+
+
+count_da_urbandiet.ctr <- reshape2::melt(count_da_urbandiet.ctr)
+
+count_da_urbandiet.ctr
+```
+
+```{r}
+count_da_urbandiet.ctr$comparison <- factor(count_da_urbandiet.ctr$comparison, levels = c("t0_vs_t1","t1_vs_t2","t0_vs_t2"))
+
+ggplot(count_da_urbandiet.ctr, aes(x= comparison, y= value, fill = variable))+
+  geom_bar(stat = "identity",color = "black", position = "stack")+
+  scale_fill_manual(values = c("up" = "tomato3","down" = "cornflowerblue"))+
+  geom_text(vjust = 1, position = position_stack(), aes(label = value))+
+  theme_bw()+
+  ggtitle("urbandiet.ctr")+
+  theme(aspect.ratio = 1.5)
+```
+
+# --------------------------------
+## 5.2. ruraldiet.ctr: Urban controls
+### PCA Urban controls
+```{r}
+sample_table_ruraldiet.ctr <- subset(sample_table, diet == "controls_u")
+rownames(sample_table_ruraldiet.ctr) <- sample_table_ruraldiet.ctr$ID
+
+metabo_log2_ruraldiet.ctr <-metabo_log2[,match(sample_table_ruraldiet.ctr$ID, colnames(metabo_log2))]
+
+identical(sample_table_ruraldiet.ctr$ID, colnames(metabo_log2_ruraldiet.ctr))
+
+pca.ruraldiet.ctr <- plotPCAnew(pca_input = metabo_log2_ruraldiet.ctr, 
+           ntop = "all", Scale = T,
+           xPC = 1, yPC = 2, point_size = 4, 
+           anno_colour = col_timepoint, 
+           anno= sample_table_ruraldiet.ctr, 
+           color = "timepoint", color.ellipse = T, title = "urban/mbege diet controls (urban controls)")+border() + theme_bw()+ theme(aspect.ratio = 1)
+
+pca.ruraldiet.ctr
+```
+
+
+## DREAM analysis: controls_u
+## Variance partition - urban controls
+
+
+### step1: find metabolites contributing to more than 5% variation for each time comparison
+```{r}
+form <- ~ Age + (1 | PID) + timepoint_numeric + BMI_t0 + activity_sum_rank_scaled
+
+varpart_features_ruraldiet.ctr <- list()
+
+for ( i in c("t0_vs_t1","t1_vs_t2","t0_vs_t2")){
+  tp1 <- str_split_fixed(i,"_vs_",2)[,1]
+  tp2 <- str_split_fixed(i,"_vs_",2)[,2]
+  
+  tmpinfo <- subset(sample_table_ruraldiet.ctr, timepoint %in% c(tp1,tp2))
+  
+  ## make timepoint variable into numeric
+  tmpinfo$timepoint_numeric <- as.numeric(gsub("t","",tmpinfo$timepoint))
+  
+  tmpdata <- metabo_log2_ruraldiet.ctr[,match(tmpinfo$ID, colnames(metabo_log2_ruraldiet.ctr))]
+  
+  if(identical(tmpinfo$ID, colnames(tmpdata))){
+    print("identical")
+  } else{
+    stop("error, info and data samples not ordered correctly")
+  }
+  
+  
+  tmpvarpart <- fitExtractVarPartModel(tmpdata, form, tmpinfo)
+  
+  # sort variables (i.e. columns) by median fraction
+#       of variance explained
+tmpvarpart <- sortCols(tmpvarpart)
+
+varpart_features_ruraldiet.ctr[[i]]$varpart <- tmpvarpart
+varpart_features_ruraldiet.ctr[[i]]$info <- tmpinfo
+varpart_features_ruraldiet.ctr[[i]]$data <- tmpdata
+
+}
+```
+
+### step2: plot results
+```{r}
+## colors 
+colors_vars <- c("Residuals" = "lightgray",
+                 "timepoint_numeric"  = "turquoise",
+                 "Age" = "purple",
+                 "BMI_t0" = "cornflowerblue",
+                 "PID" = "lightyellow",
+                 "activity_sum_rank_scaled" = "tomato3")
+```
+
+```{r}
+list_parvar_plots_ruraldiet.ctr <- list()
+
+for (i in names(varpart_features_ruraldiet.ctr)){
+  print(i)
+  
+tmp_df <- as.data.frame(varpart_features_ruraldiet.ctr[[i]]$varpart)
+tmp_df$ionMz <- rownames(tmp_df)
+tmp_df <- reshape2::melt(tmp_df, id.vars = "ionMz")
+
+timepoint_var <- subset(tmp_df, variable == "timepoint_numeric")$value
+names(timepoint_var) <- as.character(subset(tmp_df, variable == "timepoint_numeric")$ionMz)
+
+tmp_df$timepoint <- timepoint_var[match(tmp_df$ionMz, names(timepoint_var))]
+tmp_df$value100 <- 100*tmp_df$value
+
+## factor
+tmp_df$variable <- factor(tmp_df$variable, levels = rev(c("timepoint_numeric","Age","BMI_t0","activity_sum_rank_scaled", "PID","Residuals")))
+
+
+tmp_df <- tmp_df[order(tmp_df$timepoint, decreasing = T),]
+
+tmp_df$compoundname <- melt_annotation_tal_new[match(as.character(tmp_df$ionMz), as.character( melt_annotation_tal_new$ionMz)),"CompoundID_new"]
+
+# barplot
+tmpplot <- ggplot(subset(tmp_df, timepoint >0.05), aes(x = reorder(compoundname, timepoint), y = value100, fill = variable))+
+  geom_bar(stat = "identity", position = "stack")+
+  coord_flip()+
+  scale_fill_manual(values = colors_vars)+
+ xlab("")+
+  ylab("% Explained variance")+
+  ggtitle("t0vst1 Top contributions (>5%) - timepoint")
+
+
+list_parvar_plots_ruraldiet.ctr[["df"]][[i]] <- tmp_df
+list_parvar_plots_ruraldiet.ctr[["plot"]][[i]] <- tmpplot
+}
+```
+```{r fig.width=20, fig.height=10}
+wrap_plots(list_parvar_plots_ruraldiet.ctr$plot, nrow = 1, guides = "collect")
+```
+
+### step3: extract metabolites contributing >5% for downstream analysis
+```{r}
+for (i in names(list_parvar_plots_ruraldiet.ctr$df)){
+  print(i)
+  
+  tmp_df <- NULL
+  
+  tmp_df <- list_parvar_plots_ruraldiet.ctr$df[[i]]
+  
+  var_metabo <- unique(tmp_df[tmp_df$timepoint>0.05,"ionMz"])
+
+  print(paste0(round(length(var_metabo)*100/length(unique(tmp_df$ionMz)),digits = 2),"% metabolites taken for analysis for comparison ",i))
+  
+  
+  ## add to varpart_features_ruraldiet.ctr
+  varpart_features_ruraldiet.ctr[[i]]$vars <- var_metabo
+}
+```
+
+
+
+### step4: perform dream analysis
+```{r}
+list_dream_ruraldiet.ctr <- list()
+
+for (i in names(varpart_features_ruraldiet.ctr)){
+  print(i)
+  
+  myinfo <- varpart_features_ruraldiet.ctr[[i]]$info
+  ## factor for the variables present
+  myinfo$timepoint <- factor(myinfo$timepoint, levels = unique(myinfo$timepoint))
+  
+  mydata <- varpart_features_ruraldiet.ctr[[i]]$data
+  ## filter variables
+  mydata <- mydata[which(rownames(mydata) %in% as.character( varpart_features_ruraldiet.ctr[[i]]$vars)),]
+  
+  mycontrasts <- c(
+    t0_vs_t1 = "timepointt0 - timepointt1",
+    t0_vs_t2 = "timepointt0 - timepointt2",
+    t1_vs_t2 = "timepointt1 - timepointt2"
+  )
+  
+  
+  L <- makeContrastsDream(~ 0 + timepoint + BMI_t0 + Age + activity_sum_rank_scaled + (1|PID) , myinfo,
+  contrasts = mycontrasts[names(mycontrasts) == i]
+)
+
+# Visualize contrast matrix
+plotContrasts(L)
+
+fitmm_dream <- dream(mydata, ~ 0 + timepoint + BMI_t0 + Age + activity_sum_rank_scaled + (1|PID), myinfo, L)
+
+fitmm_dream <- eBayes(fitmm_dream)
+
+dream_res <- variancePartition::topTable(fitmm_dream, coef = i, number = Inf, adjust.method = "BH", sort.by = "p", lfc = 0)
+
+dream_res$ionMz <- rownames(dream_res)
+
+print(nrow(dream_res[dream_res$adj.P.Val <=0.05,]))
+
+list_dream_ruraldiet.ctr[[i]] <- dream_res
+}
+```
+```{r}
+res_dream_ruraldiet.ctr <- do.call(rbind, Map(cbind, comparison = names(list_dream_ruraldiet.ctr),list_dream_ruraldiet.ctr))
+
+head(res_dream_ruraldiet.ctr)
+```
+```{r}
+## add sig
+res_dream_ruraldiet.ctr <- as.data.frame(res_dream_ruraldiet.ctr %>% add_significance(p.col = "adj.P.Val"))
+```
+
+### step5: calculate paire fc
+
+```{r}
+pairedFC_ruraldiet.ctr_diet <- data.frame()
+
+for(i in names(varpart_features_ruraldiet.ctr)){
+  print(i)
+  
+  ctr_condition = str_split_fixed(i, "_vs_",2)[,1]
+  test_condition = str_split_fixed(i, "_vs_",2)[,2]
+  
+  print(ctr_condition)
+  print(test_condition)
+  
+  ctrids <- rownames(subset(varpart_features_ruraldiet.ctr[[i]]$info, 
+                            as.character(timepoint) == ctr_condition))
+  testids <- rownames(subset(varpart_features_ruraldiet.ctr[[i]]$info, 
+                             as.character(timepoint) == test_condition))
+
+  
+  
+  tmpfc <- fcros::fcrosFCmat(varpart_features_ruraldiet.ctr[[i]]$data, ctrids, testids, log2.opt = 0)
+
+  tmp_pairedFC <- data.frame(ionMz = tmpfc$idnames, 
+                                       FC = as.numeric(tmpfc$FC), 
+                                       FC2 = as.numeric(tmpfc$FC2))
+
+  tmp_pairedFC$log2FC <- log2(tmp_pairedFC$FC)
+  tmp_pairedFC$log2FC2 <- log2(tmp_pairedFC$FC2)
+
+  tmp_pairedFC$direction <- ifelse(tmp_pairedFC$log2FC2>0,"up",  "down")
+
+  tmp_pairedFC$comparison <- i
+  
+  pairedFC_ruraldiet.ctr_diet <- rbind(pairedFC_ruraldiet.ctr_diet, tmp_pairedFC)
+}
+```
+### step6: combine dream and paireFC results
+
+```{r}
+### add paired FC
+pairedFC_ruraldiet.ctr_diet$merged <- paste0(pairedFC_ruraldiet.ctr_diet$ionMz,"_", pairedFC_ruraldiet.ctr_diet$comparison)
+
+res_dream_ruraldiet.ctr$merged <- paste0(res_dream_ruraldiet.ctr$ionMz,"_", res_dream_ruraldiet.ctr$comparison)
+
+cols_2_add <- c("FC","FC2","log2FC","log2FC2","direction","merged")
+
+res_dream_ruraldiet.ctr <- merge(res_dream_ruraldiet.ctr, pairedFC_ruraldiet.ctr_diet[,cols_2_add], by = "merged")
+
+res_dream_ruraldiet.ctr$regulation <- ifelse(res_dream_ruraldiet.ctr$adj.P.Val.signif != "ns" & abs(res_dream_ruraldiet.ctr$log2FC2) > log2(fc_threshold), res_dream_ruraldiet.ctr$direction, "ns")
+
+rownames(res_dream_ruraldiet.ctr) <- res_dream_ruraldiet.ctr$merged
+
+res_dream_ruraldiet.ctr$CompoundName <- melt_annotation_tal_new[match(as.character(res_dream_ruraldiet.ctr$ionMz), as.character(melt_annotation_tal_new$ionMz)),"CompoundName"]
+
+res_dream_ruraldiet.ctr$HMDB <- melt_annotation_tal_new[match(as.character(res_dream_ruraldiet.ctr$ionMz), as.character(melt_annotation_tal_new$ionMz)),"CompoundID_new"]
+
+res_dream_ruraldiet.ctr$label <- ifelse(res_dream_ruraldiet.ctr$adj.P.Val.signif !="ns", str_trunc(res_dream_ruraldiet.ctr$CompoundName,24),NA)
+
+head(res_dream_ruraldiet.ctr)
+```
+
+### step7: list of sig metabolites
+```{r}
+list_sig_dream_ruraldiet.ctr_diet <- list()
+
+for(i in unique(res_dream_ruraldiet.ctr$comparison)){
+  
+  print(i)
+  
+  list_sig_dream_ruraldiet.ctr_diet[[i]] <- split(
+    subset(res_dream_ruraldiet.ctr, regulation != "ns" & comparison == i)$ionMz,
+     subset(res_dream_ruraldiet.ctr, regulation != "ns" & comparison == i)$regulation
+    )
+  
+}
+
+str(list_sig_dream_ruraldiet.ctr_diet)
+```
+```{r}
+list_sig_dream_ruraldiet.ctr_diet_name <- list()
+
+for(i in unique(res_dream_ruraldiet.ctr$comparison)){
+  
+  print(i)
+  
+  list_sig_dream_ruraldiet.ctr_diet_name[[i]] <- split(
+    subset(res_dream_ruraldiet.ctr, regulation != "ns" & comparison == i)$CompoundName,
+     subset(res_dream_ruraldiet.ctr, regulation != "ns" & comparison == i)$regulation
+    )
+  
+}
+
+str(list_sig_dream_ruraldiet.ctr_diet_name)
+```
+```{r}
+list_sig_dream_ruraldiet.ctr_diet_hmdb <- list()
+
+for(i in unique(res_dream_ruraldiet.ctr$comparison)){
+  
+  print(i)
+  
+  list_sig_dream_ruraldiet.ctr_diet_hmdb[[i]] <- split(
+    subset(res_dream_ruraldiet.ctr, regulation != "ns" & comparison == i)$HMDB,
+     subset(res_dream_ruraldiet.ctr, regulation != "ns" & comparison == i)$regulation
+    )
+  
+}
+
+str(list_sig_dream_ruraldiet.ctr_diet_hmdb)
+```
+
+
+### step8: plots
+count
+```{r}
+count_da_ruraldiet.ctr <- as.data.frame(res_dream_ruraldiet.ctr %>% 
+                                      group_by(comparison) %>% 
+                                      summarize(up = sum(regulation == "up"),
+                                                down = sum(regulation == "down")))
+
+
+count_da_ruraldiet.ctr <- reshape2::melt(count_da_ruraldiet.ctr)
+
+count_da_ruraldiet.ctr
+```
+
+```{r}
+count_da_ruraldiet.ctr$comparison <- factor(count_da_ruraldiet.ctr$comparison, levels = c("t0_vs_t1","t1_vs_t2","t0_vs_t2"))
+
+ggplot(count_da_ruraldiet.ctr, aes(x= comparison, y= value, fill = variable))+
+  geom_bar(stat = "identity",color = "black", position = "stack")+
+  scale_fill_manual(values = c("up" = "tomato3","down" = "cornflowerblue"))+
+  geom_text(vjust = 1, position = position_stack(), aes(label = value))+
+  theme_bw()+
+  ggtitle("ruraldiet.ctr")+
+  theme(aspect.ratio = 1.5)
+```
+## 5.3. Compare diet with ctr
+
+### List DAM all
+```{r}
+
+list_dam_all_dream <- list(urban_diet = unlist(list_sig_dream_urbandiet_diet, recursive = F), 
+                           rural_diet = unlist(list_sig_dream_ruraldiet_diet, recursive = F), 
+                           MBEGE = unlist(list_sig_dream_mbege_diet, recursive = F), 
+                           rural_diet_ctr = unlist(list_sig_dream_ruraldiet.ctr_diet, recursive = F), 
+                           urban_diet_ctr = unlist(list_sig_dream_urbandiet.ctr_diet, recursive = F))
+
+list_dam_all_dream <- unlist(list_dam_all_dream, recursive = F)
+
+str(list_dam_all_dream)
+```
+
+
+```{r}
+dam_all_dream_df <- as.data.frame(do.call(rbind, Map(cbind, comp = names(list_dam_all_dream), list_dam_all_dream)))
+
+dam_all_dream_df$diet <- str_split_fixed(dam_all_dream_df$comp,"\\.", 3)[,1]
+dam_all_dream_df$comparison <- str_split_fixed(dam_all_dream_df$comp,"\\.", 3)[,2]
+dam_all_dream_df$regulation <- str_split_fixed(dam_all_dream_df$comp,"\\.", 3)[,3]
+dam_all_dream_df$treat <- ifelse(grepl("ctr",dam_all_dream_df$diet),"control","diet")
+
+head(dam_all_dream_df)
+```
+
+```{r}
+dam_all_dream_df$main_diet <- ifelse(dam_all_dream_df$diet == "urban_diet_ctr","urban_diet", 
+                                     ifelse(dam_all_dream_df$diet == "rural_diet_ctr", "rural_diet", 
+                                            dam_all_dream_df$diet))
+
+unique(dam_all_dream_df$main_diet)
+```
+```{r}
+## add compoundName
+dam_all_dream_df$CompoundName <- melt_annotation_tal_new[match(as.character(dam_all_dream_df$V2), as.character(melt_annotation_tal_new$ionMz)),"CompoundName"]
+
+dam_all_dream_df$CompoundName[1:5]
+```
+```{r}
+## urban diet
+tmp <- subset(dam_all_dream_df, main_diet == "urban_diet")
+
+tmp_sum <- as.data.frame(tmp %>% 
+                           group_by(CompoundName, diet, comparison) %>% 
+                           summarize(diet.count = sum(treat == "diet"), 
+                                     ctr.count = sum(treat == "control")))
+
+## keep only rows with ctr == 1
+tmp_sum_urbandiet <- subset(tmp_sum, ctr.count == 1 & diet.count == 1)
+dim(tmp_sum_urbandiet)
+```
+```{r}
+## rural diet
+tmp <- subset(dam_all_dream_df, main_diet == "rural_diet")
+
+tmp_sum <- as.data.frame(tmp %>% 
+                           group_by(CompoundName, diet, comparison) %>% 
+                           summarize(diet.count = sum(treat == "diet"), 
+                                     ctr.count = sum(treat == "control")))
+## keep only rows with ctr == 1
+tmp_sum_ruraldiet <- subset(tmp_sum, ctr.count == 1 & diet.count == 1)
+dim(tmp_sum_ruraldiet)
+```
+```{r}
+## Mbege
+tmp <- subset(dam_all_dream_df, diet %in% c("MBEGE","rural_diet_ctr"))
+
+tmp_sum <- as.data.frame(tmp %>% 
+                           group_by(CompoundName, diet, comparison) %>% 
+                           summarize(diet.count = sum(treat == "diet"), 
+                                     ctr.count = sum(treat == "control")))
+## keep only rows with ctr == 1
+tmp_sum_mbege <- subset(tmp_sum, ctr.count == 1 & diet.count == 1)
+dim(tmp_sum_mbege)
+```
+### .. upset plots
+### ... > urbandiet
+```{r}
+tmp <- list_dam_all_dream[grepl("urban_diet", names(list_dam_all_dream))]
+
+tmp2 <- tmp[grepl("t0_vs_t1", names(tmp))]
+upset(fromList(tmp2), sets = names(tmp2), keep.order = T)
+
+tmp2 <- tmp[grepl("t0_vs_t2", names(tmp))]
+upset(fromList(tmp2), sets = names(tmp2), keep.order = T)
+
+tmp2 <- tmp[grepl("t1_vs_t2", names(tmp))]
+upset(fromList(tmp2), sets = names(tmp2), keep.order = T)
+```
+### ... > ruraldiet
+```{r}
+tmp <- list_dam_all_dream[grepl("rural_diet", names(list_dam_all_dream))]
+
+tmp2 <- tmp[grepl("t0_vs_t1", names(tmp))]
+upset(fromList(tmp2), sets = names(tmp2), keep.order = T)
+
+tmp2 <- tmp[grepl("t0_vs_t2", names(tmp))]
+upset(fromList(tmp2), sets = names(tmp2), keep.order = T)
+
+tmp2 <- tmp[grepl("t1_vs_t2", names(tmp))]
+upset(fromList(tmp2), sets = names(tmp2), keep.order = T)
+```
+### ... > mbege
+```{r}
+tmp <- list_dam_all_dream[grepl("rural_diet_ctr|MBEGE", names(list_dam_all_dream))]
+
+tmp2 <- tmp[grepl("t0_vs_t1", names(tmp))]
+upset(fromList(tmp2), sets = names(tmp2), keep.order = T)
+
+tmp2 <- tmp[grepl("t0_vs_t2", names(tmp))]
+upset(fromList(tmp2), sets = names(tmp2), keep.order = T)
+
+tmp2 <- tmp[grepl("t1_vs_t2", names(tmp))]
+upset(fromList(tmp2), sets = names(tmp2), keep.order = T)
+```
+
+
+
+`
+
+### mark in res_dream_all DAM in control
+
+```{r}
+res_dream_all$DAM_in_ctr <- NA
+res_dream_all$DAM_in_ctr_up <- NA
+
+for(i in unique(res_dream_all$diet)){
+  print(i)
+  
+  for (j in unique(res_dream_all$comparison)){
+    print(j)
+    
+    if(i == "MBEGE"){
+      lookup <- paste0("rural_diet","_ctr.",j)
+    } else{
+      lookup <- paste0(i, "_ctr.",j)
+    }
+    
+    dam_ctr <-  as.character(unique(unlist(list_dam_all_dream[grepl(lookup, names(list_dam_all_dream))])))
+    
+    dam_ctr_up <- as.character(unique(unlist(list_dam_all_dream[grepl(paste0(lookup,".up"), names(list_dam_all_dream))])))
+
+    
+    res_dream_all[which(res_dream_all$diet == i & res_dream_all$comparison == j & res_dream_all$regulation != "ns"), "DAM_in_ctr"] <- ifelse(as.character(res_dream_all[which(res_dream_all$diet == i & res_dream_all$comparison == j & res_dream_all$regulation != "ns"), "ionMz"]) %in% dam_ctr, "yes","")
+    
+    res_dream_all[which(res_dream_all$diet == i & res_dream_all$comparison == j & res_dream_all$regulation != "ns"), "DAM_in_ctr_up"] <- ifelse(res_dream_all[which(res_dream_all$diet == i & res_dream_all$comparison == j & res_dream_all$regulation != "ns"), "DAM_in_ctr"] == "yes" &  as.character( res_dream_all[which(res_dream_all$diet == i & res_dream_all$comparison == j & res_dream_all$regulation != "ns"), "ionMz"]) %in% dam_ctr_up, "up","") 
+    
+  }
+}
+```
+```{r}
+res_dream_all$DAM_in_ctr_direction <- ifelse(res_dream_all$DAM_in_ctr == "yes" & res_dream_all$DAM_in_ctr_up == "","down", res_dream_all$DAM_in_ctr_up)
+## which values are NA or "" will be ns
+
+res_dream_all$DAM_in_ctr_direction <- ifelse(is.na(res_dream_all$DAM_in_ctr_direction)| res_dream_all$DAM_in_ctr_direction =="","ns", res_dream_all$DAM_in_ctr_direction)
+
+unique(res_dream_all$DAM_in_ctr_direction )
+
+```
+
+
+### ... plot intersection with control
+```{r}
+metabo_in_ctr <- unique(subset(res_dream_all, DAM_in_ctr_direction != "ns")$HMDB)
+plot_intersect <- subset(res_dream_all, HMDB %in% metabo_in_ctr)
+
+plot_intersect <- reshape2::melt(plot_intersect[,c("comparison", "diet","regulation","DAM_in_ctr_direction","CompoundName")], id.vars = c("comparison", "diet","CompoundName" ))
+
+plot_intersect$V1 <- ifelse(plot_intersect$variable == "regulation", "diet", "ctr")
+
+head(plot_intersect)
+```
+```{r fig.width=10, fig.height=6}
+plot_intersect$comparison <- factor(plot_intersect$comparison, levels = c("t0_vs_t1","t1_vs_t2","t0_vs_t2"))
+
+plot_intersect <- subset(plot_intersect, value !="ns")
+# plot_intersect <- subset(plot_intersect, !(value %in% c("","ns")))
+# 
+plot_intersect <- as.data.frame(plot_intersect %>% group_by(diet, CompoundName) %>% mutate(sum_ctr = sum(V1 == "ctr")))
+# 
+# plot_intersect <- subset(plot_intersect, sum_indiet >1)
+
+#plot_intersect <- plot_intersect[!is.na(plot_intersect$value),]
+
+ggplot(subset(plot_intersect, sum_ctr >0), aes(x= V1, y = CompoundName, shape = value, fill = value))+
+  geom_point(size = 2)+
+  scale_shape_manual(values = c("up" = 24, "down" = 25) )+
+  scale_fill_manual(values = c("up" = "tomato3", "down" = "cornflowerblue", "ns" = "white"))+
+  facet_grid(diet ~ comparison, scales = "free", space = "free")+
+  theme(axis.title = element_blank())+
+  ggtitle("DAM in controls")
+```
+
+### plot intersect with control including the FC
+```{r}
+intersect_metabo <- unique(subset(plot_intersect, sum_ctr >0)$CompoundName)
+
+res_dream_ruraldiet.ctr$diet <- "rural_diet_ctr"
+res_dream_urbandiet.ctr$diet <- "urban_diet_ctr"
+
+tmp_intersect <- rbind(all_sig_df[,c("diet","comparison","log2FC2","regulation","CompoundName","adj.P.Val")],res_dream_ruraldiet.ctr[,c("diet","comparison","log2FC2","regulation","CompoundName","adj.P.Val")], res_dream_urbandiet.ctr[,c("diet","comparison","log2FC2","regulation","CompoundName","adj.P.Val")])
+
+head(tmp_intersect)
+```
+
+```{r,  fig.width=10, fig.height=6}
+tmp_intersect$diet_comparison <- paste0(tmp_intersect$diet,"_",tmp_intersect$comparison)
+
+tmp_intersect <- as.data.frame(tmp_intersect %>% mutate(
+  group = case_when(
+    diet == "urban_diet" ~ "urabn_diet",
+    diet == "urban_diet_ctr" ~ "urban_diet", 
+    diet == "rural_diet" ~ "rural_diet", 
+    diet == "rural_diet_ctr" ~ "rural_diet",
+    diet == "MBEGE" ~ "mbege"
+  )
+))
+
+tmp_intersect <- as.data.frame(tmp_intersect %>% mutate(
+  treatment = case_when(
+    diet %in% c("urban_diet","rural_diet","MBEGE") ~ "diet",
+    diet %in% c("urban_diet_ctr","rural_diet_ctr") ~ "ctr"
+  )
+))
+
+tmp_intersect$label <- str_trunc(tmp_intersect$CompoundName,24)
+
+ggplot(subset(tmp_intersect, group == "urban_diet" & regulation != "ns"), aes(x= treatment, y= label, shape = regulation, fill = log2FC2))+
+  geom_point(size = 2)+
+  scale_shape_manual(values = c("up" = 24, "down" = 25) )+
+  scale_fill_gradientn(colours = c("blue","white","red"), 
+                       limits = c(-max.val, max.val),
+                       guide = guide_colorbar(frame.colour = "black", 
+                                              ticks.colour = "black"))+
+  facet_wrap(. ~ comparison,  nrow = 1)+
+  theme(axis.title = element_blank())+
+  ggtitle("DAM in controls")
+
+```
+
+
+
+
+# ===============================
+
+# 6. pathways
+#### ... annotation
+```{r}
+anno_pathways <- data.frame()
+for (i in unique(res_dream_all$diet)){
+  print(i)
+  
+  for (j in unique(res_dream_all$comparison)){
+    dfup <- Getpathway_RAMPdb(hmdbinput = paste0("hmdb:", unique(subset(res_dream_all, diet == i & comparison == j & regulation == "up")$HMDB)))
+    dfup$regulation <- "up"
+    
+  dfdown <- Getpathway_RAMPdb(hmdbinput = paste0("hmdb:", unique(subset(res_dream_all, diet == i & comparison == j & regulation == "down")$HMDB)))
+  dfdown$regulation <- "down"
+  
+  tmpdf <- rbind(dfup, dfdown)
+  tmpdf$comparison <- j
+  tmpdf$diet <- i
+  
+  anno_pathways<- rbind(anno_pathways, tmpdf)
+  }
+
+}
+
+
+head(anno_pathways)
+```
+
+
+
+```{r}
+pathway_count <- as.data.frame(anno_pathways %>% group_by(diet, comparison, regulation, pathwayName) %>% summarize(count = n()))
+
+head(pathway_count)
+```
+```{r}
+pathway_count$pathwayName_low <- tolower(pathway_count$pathwayName)
+
+pathway_count$merged <- paste0(pathway_count$pathwayName_low,"_", pathway_count$comparison,"_", pathway_count$regulation)
+```
+
+```{r fig.height=8, fig.width=15}
+pathway_count$diet <- factor(pathway_count$diet, levels = c("urban_diet","rural_diet","MBEGE"))
+
+pathway_count$comparison <- factor(pathway_count$comparison, levels = c("t0_vs_t1","t1_vs_t2","t0_vs_t2"))
+
+ggplot(subset(pathway_count, count >3), aes(x= regulation, y= pathwayName))+
+  geom_point(aes(size = count, fill = regulation), shape = 21)+
+  scale_fill_manual(values = c("up" = "tomato3","down" = "cornflowerblue"))+
+  facet_wrap(diet~comparison, nrow = 1)+
+  scale_size_continuous(range = c(3,8))
+```
+
+#### ... fisher pathway
+#### .... > enrich by direction
+```{r}
+fisher_pathways <- data.frame()
+
+for (i in unique(res_dream_all$diet)){
+  print(i)
+  
+  for (j in unique(res_dream_all$comparison)){
+    dfup <- Getfisherpathway_RAMPdb(hmdbinput = paste0("hmdb:", unique(subset(res_dream_all, diet == i & comparison == j & regulation == "up")$HMDB)))$fishresults
+    dfup$regulation <- "up"
+    if(length(dfup)>0){
+    dfup$regulation <- "up"
+  } else {
+    dfup <- NULL
+  }
+    
+  dfdown <- Getfisherpathway_RAMPdb(hmdbinput = paste0("hmdb:", unique(subset(res_dream_all, diet == i & comparison == j & regulation == "down")$HMDB)))$fishresults
+  if(length(dfdown)>0){
+    dfdown$regulation <- "down"
+  } else {
+    dfdown <- NULL
+  }
+
+  
+  
+  tmpdf <- rbind(dfup, dfdown)
+  tmpdf$comparison <- j
+  tmpdf$diet <- i
+  
+  fisher_pathways<- rbind(fisher_pathways, tmpdf)
+  }
+
+}
+
+
+head(fisher_pathways)
+
+
+```
+
+```{r}
+fisher_pathways$pathwayName_low <- tolower(fisher_pathways$pathwayName)
+
+fisher_pathways$merged <- paste0(fisher_pathways$diet, "_",fisher_pathways$pathwayName_low,"_", fisher_pathways$comparison,"_", fisher_pathways$regulation)
+
+fisher_pathways_sig <- subset(fisher_pathways, Pval_FDR <= 0.05)
+
+```
+
+
+```{r fig.height=6, fig.width=15}
+fisher_pathways_sig$diet <- factor(fisher_pathways_sig$diet, levels = c("urban_diet","rural_diet","MBEGE"))
+
+fisher_pathways_sig$comparison <- factor(fisher_pathways_sig$comparison, levels = c("t0_vs_t1","t1_vs_t2","t0_vs_t2"))
+
+top_8_enrichpath <- as.data.frame(subset(fisher_pathways_sig,pathwaySource %in% c("wiki"))  %>% group_by(diet, comparison, regulation) %>% slice_min(abs(Pval_FDR), n = 8))
+
+ggplot(subset(top_8_enrichpath, regulation != "all"), 
+       aes(x= regulation, y= pathwayName))+
+  geom_point(aes(size = Num_In_Path, fill = regulation), shape = 21)+
+  scale_fill_manual(values = c("up" = "tomato3","down" = "cornflowerblue"))+
+  facet_wrap(diet~comparison, nrow = 1)+
+   scale_size_continuous(range = c(2,8))+
+  theme_bw()+
+  theme(axis.title = element_blank())
+```
+
+
+##### ... > hm enrichment
+```{r}
+top_4_enrichpath <- as.data.frame(subset(fisher_pathways_sig,pathwaySource  == "wiki")  %>% group_by(diet, comparison, regulation) %>% slice_min(abs(Pval_FDR), n = 8))
+
+hmdf_enrich <- top_4_enrichpath
+
+hmdf_enrich<- hmdf_enrich[!duplicated(hmdf_enrich$merged),]
+
+#wide_anno <- top_8_enrichpath
+wide_anno <- data.frame()
+
+wide_anno <- wide_anno[]
+for(i in unique(hmdf_enrich$merged)){
+  
+  tmp <- str_split_fixed(hmdf_enrich[hmdf_enrich$merged == i,]$analytes,
+                         ";", 
+                         n = hmdf_enrich[hmdf_enrich$merged == i,]$Num_In_Path)
+  
+  tmp <- as.character(tmp[1,])
+  
+  tmp <- unlist(lapply(sapply(tmp, str_split,","),"[",1))
+  
+  tmp <- data.frame(metbolite = tmp, merged = i)
+  
+  wide_anno<- rbind(wide_anno, tmp)
+  
+}
+
+head(wide_anno)
+```
+```{r}
+wide_anno$diet <- hmdf_enrich[match(wide_anno$merged, hmdf_enrich$merged),"diet"] 
+
+wide_anno$pathway <-hmdf_enrich[match(wide_anno$merged, hmdf_enrich$merged),"pathwayName"] 
+
+wide_anno$comparison <- hmdf_enrich[match(wide_anno$merged, hmdf_enrich$merged),"comparison"] 
+
+wide_anno$regulation <- hmdf_enrich[match(wide_anno$merged, hmdf_enrich$merged),"regulation"] 
+```
+
+```{r}
+## add unique ID for metabolite and get log2FC2 values
+wide_anno$HMDB <- melt_annotation_tal_new[match(wide_anno$metbolite, melt_annotation_tal_new$CompoundName), ]$CompoundID_new
+
+wide_anno[is.na(wide_anno$HMDB),c("metbolite","merged")]
+```
+```{r}
+## some metabolites were not found and will be inputted manuall
+wide_anno$CompoundName <- NA
+
+wide_anno[wide_anno$metbolite == "Ferulic acid 4-O-sulfate","CompoundName"] <- "Ferulic acid 4-sulfate"
+
+wide_anno[wide_anno$metbolite == "alpha-Linolenic acid","CompoundName"] <- "Alpha-Linolenic acid"
+
+wide_anno[wide_anno$metbolite == "O5;Arachidonic acid","CompoundName"] <- "Arachidonic acid"
+
+wide_anno[wide_anno$metbolite == "Malic acid","CompoundName"] <- "L-Malic acid"
+
+wide_anno[wide_anno$metbolite == "LysoPA(0:0/16:0);LysoPA(0:0/18:0)","CompoundName"] <- "LPA(0:0/16:0)"
+
+wide_anno[is.na(wide_anno$HMDB),"HMDB"] <- melt_annotation_tal_new[match(wide_anno[is.na(wide_anno$HMDB),"CompoundName"], melt_annotation_tal_new$CompoundName), ]$CompoundID_new
+
+wide_anno[is.na(wide_anno$HMDB),c("metbolite","merged")]
+```
+```{r}
+wide_anno$uniqueID <- paste0(wide_anno$HMDB,"_", wide_anno$diet,"_", wide_anno$comparison,"_", wide_anno$regulation)
+
+all_sig_df$merged <- paste0(all_sig_df$HMDB,"_", all_sig_df$diet,"_", all_sig_df$comparison,"_", all_sig_df$regulation)
+
+wide_anno$log2FC2 <- all_sig_df[match(wide_anno$uniqueID, all_sig_df$merged),"log2FC2"]
+
+wide_anno$log2FC2 [1:10]
+```
+```{r}
+wide_anno$label <- ifelse(is.na(wide_anno$metbolite), wide_anno$CompoundName, wide_anno$metbolite)
+```
+
+
+
+```{r fig.height=12, fig.width=15}
+## replace NA with 0
+wide_anno[is.na(wide_anno$log2FC2),"log2FC2"] <- 0
+
+ggplot(wide_anno, aes(x = label, y = pathway, fill = log2FC2))+
+  geom_tile(color = "black")+
+  scale_fill_gradientn(colors = c("blue","white","red"))+
+  facet_grid(comparison ~ diet, scales = "free", space = "free")+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+```{r fig.width=10, fig.height=6}
+ggplot(subset(wide_anno, diet == "urban_diet"), aes(x = label, y = pathway, fill = log2FC2))+
+  geom_tile(color = "black")+
+  scale_fill_gradientn(colors = c("blue","white","red"))+
+  facet_grid(comparison~ ., scales = "free", space = "free")+
+  theme(axis.text.x =  element_text(angle = 90))
+```
+```{r fig.height=4, fig.width=8}
+dfx <- subset(wide_anno, pathway %in% c("Biomarkers for urea cycle disorders","Glucose homeostasis","Flavan−3−ol metabolic pathway","Omega−3 / omega−6 fatty acid synthesis","Prostaglandin and leukotriene metabolism in senescence") & diet == "urban_diet")
+
+
+max.val <- round(max(abs(dfx$log2FC2), na.rm = T),1)*1.2
+
+p.enrich.urban <- ggplot(dfx, aes(x = label, y = pathway, fill = log2FC2))+
+  geom_tile(color = "black")+
+  scale_fill_gradientn(colours = c("blue","white","red"), 
+                       limits = c(-max.val, max.val),
+                       guide = guide_colorbar(frame.colour = "black", 
+                                              ticks.colour = "black") )+
+  facet_grid(comparison~ ., scales = "free", space = "free")+
+  theme(axis.text.x =  element_text(angle = 40, hjust = 1), axis.title = element_blank())+ggtitle("Urban diet")
+
+p.enrich.urban
+```
+```{r fig.height=3, fig.width=8}
+dfx <- subset(wide_anno, pathway %in% c("Incretin synthesis, secretion, and inactivation","Omega-9 fatty acid synthesis","Omega−3 / omega−6 fatty acid synthesis","Neurotransmitter release cycle") & diet == "rural_diet")
+
+max.val <- round(max(abs(dfx$log2FC2), na.rm = T),1)*1.2
+
+p.enrich.rural <- ggplot(dfx, aes(x = label, y = pathway, fill = log2FC2))+
+  geom_tile(color = "black")+
+  scale_fill_gradientn(colours = c("blue","white","red"), 
+                       limits = c(-max.val, max.val),
+                       guide = guide_colorbar(frame.colour = "black", 
+                                              ticks.colour = "black") )+
+  facet_grid(comparison~ ., scales = "free", space = "free")+
+  theme(axis.text.x =  element_text(angle = 40, hjust = 1), axis.title = element_blank())+ggtitle("rural diet")
+
+p.enrich.rural
+```
+
+```{r fig.height=4, fig.width=8}
+dfx <- subset(wide_anno, pathway %in% c("Incretin synthesis, secretion, and inactivation","Omega-9 fatty acid synthesis","Omega−3 / omega−6 fatty acid synthesis","Neurotransmitter release cycle") & diet == "rural_diet")
+
+max.val <- round(max(abs(dfx$log2FC2), na.rm = T),1)*1.2
+
+p.enrich.rural <- ggplot(dfx, aes(x = label, y = pathway, fill = log2FC2))+
+  geom_tile(color = "black")+
+  scale_fill_gradientn(colours = c("blue","white","red"), 
+                       limits = c(-max.val, max.val),
+                       guide = guide_colorbar(frame.colour = "black", 
+                                              ticks.colour = "black") )+
+  facet_grid(comparison~ ., scales = "free", space = "free")+
+  theme(axis.text.x =  element_text(angle = 40, hjust = 1), axis.title = element_blank())+ggtitle("rural diet")
+
+p.enrich.rural
+```
+
+```{r fig.height=4, fig.width=8}
+dfx <- subset(wide_anno, pathway %in% c("Flavan−3−ol metabolic pathway","Omega−3 / omega−6 fatty acid synthesis","Regulation of lipid metabolism by PPARalpha","Activation of gene expression by SREBF (SREBP)") & diet == "MBEGE")
+
+dfx$labelx_x <- str_trunc(dfx$label,23)
+
+max.val <- round(max(abs(dfx$log2FC2), na.rm = T),1)*1.2
+
+p.enrich.mbege <- ggplot(dfx, aes(x = labelx_x, y = pathway, fill = log2FC2))+
+  geom_tile(color = "black")+
+  scale_fill_gradientn(colours = c("blue","white","red"), 
+                       limits = c(-max.val, max.val),
+                       guide = guide_colorbar(frame.colour = "black", 
+                                              ticks.colour = "black") )+
+  facet_grid(comparison~ ., scales = "free", space = "free")+
+  theme(axis.text.x =  element_text(angle = 40, hjust = 1), axis.title = element_blank())+ggtitle("Mbege")
+
+p.enrich.mbege
+```
+
+
+# =======================================
+
+# 7. Export
+
+## 7.1. EXPORT results
+```{r}
+export_cols <- c("CompoundName","HMDB", "ionMz","class_name", "comparison","diet","log2FC","log2FC2","AveExpr","t","P.Value","adj.P.Val","adj.P.Val.signif", "regulation","DAM_in_ctr")
+
+export_file <- res_dream_all[,export_cols]
+
+## controls
+tmp1 <- res_dream_ruraldiet.ctr
+tmp1$diet <- "controls_u"
+tmp2 <- res_dream_urbandiet.ctr
+tmp2$diet <- "controls_r"
+res_dream_ctr <- rbind(tmp1,tmp2)
+res_dream_ctr$DAM_in_ctr <- ""
+res_dream_ctr$class_name <- rampdb__all_class_ClassyFire_class[match(res_dream_ctr$HMDB, rampdb__all_class_ClassyFire_class$HMDB),"class_name"]
+res_dream_ctr <- res_dream_ctr[,export_cols]
+
+
+export_file <- rbind(export_file, res_dream_ctr)
+
+colnames(export_file) <- c("metabolite","HMDB_id","ionMz","RAMPDb_chemical_class","comparison","diet","log2FC","log2FC2","AveExpr","t","P.Value","adj.P.Val","adj.P.Val.signif", "regulation","DAM_in_ctr")
+
+export_file$Diet <- ifelse(export_file$diet == "urban_diet", "Western Diet",
+                                          ifelse(export_file$diet == "rural_diet","Traditional Diet", 
+                                          ifelse(export_file$diet == "MBEGE" ,"Fermented banana beverage",
+                                          ifelse(export_file$diet== "controls_r", "Rural Dwellers Control",
+                                          ifelse(export_file$diet == "controls_u" , "Urban Dwellers Control", NA)))))
+
+export_file$diet <- NULL
+
+export_file$Diet <- factor(export_file$Diet, levels = c("Western Diet","Rural Dwellers Control","Traditional Diet","Fermented banana beverage","Urban Dwellers Control"))  
+
+export_file$DAM_in_ctr <- factor(export_file$DAM_in_ctr, levels = c("","yes"))
+
+export_file$regulation <- factor(export_file$regulation, levels = c("up","down","ns"))
+
+
+export_file <- export_file[order(export_file$Diet, export_file$comparison, export_file$regulation, export_file$adj.P.Val,  decreasing = F),]
+
+head(export_file)
+```
+
+## 7.2. export enrichment pathway RAMP-DB results
+```{r}
+export_fisher <- subset(fisher_pathways_sig, pathwaySource == "wiki")
+
+export_fisher<- export_fisher %>%
+  mutate(Diet = case_when(
+    diet == "urban_diet" ~ "Western Diet",
+    diet == "rural_diet" ~ "Traditional Diet",
+    diet == "MBEGE" ~ "Fermented banana beverage", 
+    diet == "controls_u" ~ "Urban Dwellers Control", 
+    diet == "controls_r" ~ "Rural Dwellers Control"
+  ))
+
+export_fisher$diet <- NULL
+
+export_fisher$Diet <- factor(export_fisher$Diet, levels = c("Western Diet", 
+                                                        "Traditional Diet", 
+                                                        "Fermented banana beverage", 
+                                                        "Urban Dwellers Control", 
+                                                        "Rural Dwellers Control"))
+
+export_fisher$regulation <- factor(export_fisher$regulation, levels = c("up","down","ns"))
+
+
+
+
+export_fisher <- export_fisher[order(export_fisher$Diet, export_fisher$comparison, export_fisher$regulation, export_fisher$Pval_FDR, decreasing = F),]
+
+
+head(export_fisher)
+```
+# ======================
+
+# 8. Session info
+```{r}
+sessionInfo()
+```
+

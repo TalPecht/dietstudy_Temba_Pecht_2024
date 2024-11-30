@@ -1,0 +1,1563 @@
+---
+title: "TZ intervention ex vivo cytokines"
+author: "TP"
+date: "2024-08-11"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: true
+    toc_depth: 3
+    number_sections: true
+    theme: lumen
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# 1. preperation
+## packages
+```{r}
+library(variancePartition)
+library(ggplot2)
+library(dplyr)
+library(ggpubr)
+library(openxlsx)
+library(naniar)
+library(rstatix)
+library(patchwork)
+library(ggsci)
+library(RColorBrewer)
+library(tidyverse)
+library(fcros)
+library(stats)
+library(ggrepel)
+library(reshape2)
+```
+
+
+## colors 
+```{r}
+# col_timepoint
+col_timepoint<- brewer.pal(n = 3, name = "Dark2")
+names(col_timepoint)<-c("t0", "t1", "t2")
+
+col_diet_diet <- c("#0564ad", "#b91c1c", "#f1c232")
+names(col_diet_diet) <- c("rural_diet", "urban_diet", "MBEGE")
+```
+
+## parameters levels
+
+```{r}
+stim_levels <- c("S.enteritidis","MTB","C.Albicans","Poly.IC","S.aureus","LPS")
+cyto_levels <- c("IFN.g","IL.10","IL.1b","IL.6","TNF.A")
+comparison_levels <- c("t0_vs_t2","t1_vs_t2","t0_vs_t1")
+```
+
+
+# 1. START - import data
+## cytokines data
+```{r}
+data_log <- read.csv("./241118_exvivo_log.csv", row.names = 1)
+
+head(data_log)
+```
+
+
+
+## Sample table
+
+```{r}
+sample_table <- read.csv("./241118_sample_table_exvivo.csv", row.names = 1)
+rownames(sample_table) <- sample_table$ID
+
+head(sample_table)
+```
+factor time point
+```{r}
+sample_table$timepoint <- factor(sample_table$timepoint, levels = c("t0","t1","t2"))
+```
+
+
+
+## create long format cytokines data frame
+```{r}
+data_log_melt <- as.data.frame(data_log)
+data_log_melt$ID <- rownames(data_log_melt)
+data_log_melt <- reshape2::melt(data_log_melt, id.vars = ("ID"), variable = "stim_cyto")
+
+data_log_melt <- merge(data_log_melt, sample_table, by = "ID", all.x = T)
+
+colnames(data_log_melt)[colnames(data_log_melt) == "value"] <- "log2value"
+head(data_log_melt)
+```
+
+
+
+
+
+
+# =================================================
+
+
+# 4. URBAN DIET group
+
+
+## Urban diet sample table
+```{r}
+table(sample_table$diet)
+```
+
+```{r}
+sample_table_urbandiet <- subset(sample_table, diet == "urban_diet")
+```
+
+
+
+
+
+## data log urban diet
+```{r}
+data_log_urbandiet <- data_log[match(as.character(sample_table_urbandiet$ID), rownames(data_log)),]
+
+dim(data_log_urbandiet)
+```
+
+# --------------------------------
+
+# Dream analysis - Urban diet
+# ----------------------------------
+
+### Step 1: model and tables prep
+
+```{r}
+identical(rownames(data_log_urbandiet), rownames(sample_table_urbandiet))
+```
+
+
+contrasts table
+```{r}
+L <- makeContrastsDream(~ 0 + timepoint + BMI_t0 + Age + activity_sum_rank_scaled + (1|PID) , sample_table_urbandiet,
+  contrasts = c(
+    t0_vs_t1 = "timepointt0 - timepointt1",
+    t0_vs_t2 = "timepointt0 - timepointt2",
+    t1_vs_t2 = "timepointt1 - timepointt2"
+  )
+)
+
+# Visualize contrast matrix
+plotContrasts(L)
+```
+
+
+
+### Step 2: Perform dream analysis
+
+```{r}
+fitmm_urbandiet_diet <- dream(t(data_log_urbandiet), 
+                              ~ 0 + timepoint + BMI_t0 + Age + activity_sum_rank_scaled + (1|PID),
+                              sample_table_urbandiet, L, ddf = "Kenward-Roger", useWeights = FALSE)
+
+fitmm_urbandiet_diet <- eBayes(fitmm_urbandiet_diet)
+```
+```{r}
+## create a list of results
+dream_urbandiet_diet <- data.frame() # create empty dataframe for storage
+
+for(i in  colnames(L)){
+  print(i)
+  
+  tmpi <- variancePartition::topTable(fitmm_urbandiet_diet, coef = i, number = Inf, adjust.method = "BH", sort.by = "p", lfc = 0)
+  
+  tmpi$comparison <- i
+  
+  tmpi$variable <- rownames(tmpi)
+  
+  tmpi <- as.data.frame(tmpi %>% add_significance(p.col = "adj.P.Val"))
+  
+  dream_urbandiet_diet <- rbind(dream_urbandiet_diet, tmpi)
+  
+}
+
+head(dream_urbandiet_diet)
+```
+
+### Step 3: add paired log2FC
+```{r}
+identical(rownames(sample_table_urbandiet), rownames(data_log_urbandiet))
+```
+
+```{r}
+pairedFC_urbandiet_diet <- data.frame()
+
+for ( i in colnames(L)){
+  print(i)
+  
+  ctr_condition = str_split_fixed(i, "_vs_",2)[,1]
+  test_condition = str_split_fixed(i, "_vs_",2)[,2]
+  
+  print(ctr_condition)
+  print(test_condition)
+  
+  ctrids <- rownames(subset(sample_table_urbandiet, as.character(timepoint) == ctr_condition))
+  testids <- rownames(subset(sample_table_urbandiet, as.character(timepoint) == test_condition))
+
+  tmpfc <- fcros::fcrosFCmat(t(data_log_urbandiet), ctrids, testids, log2.opt = 0)
+
+  tmp_pairedFC <- data.frame(variable = tmpfc$idnames, 
+                                       FC = as.numeric(tmpfc$FC), 
+                                       FC2 = as.numeric(tmpfc$FC2))
+
+  tmp_pairedFC$log2FC <- log2(tmp_pairedFC$FC)
+  tmp_pairedFC$log2FC2 <- log2(tmp_pairedFC$FC2)
+
+  tmp_pairedFC$direction <- ifelse(tmp_pairedFC$log2FC2>0,"up",  "down")
+
+  tmp_pairedFC$comparison <- i
+  
+  pairedFC_urbandiet_diet <- rbind(pairedFC_urbandiet_diet, tmp_pairedFC)
+  
+}
+
+head(pairedFC_urbandiet_diet)
+```
+
+
+```{r}
+### add paired FC
+pairedFC_urbandiet_diet$merged <- paste0(pairedFC_urbandiet_diet$variable,"_", pairedFC_urbandiet_diet$comparison)
+
+dream_urbandiet_diet$merged <- paste0(dream_urbandiet_diet$variable,"_", dream_urbandiet_diet$comparison)
+
+cols_2_add <- c("FC","FC2","log2FC","log2FC2","direction","merged")
+
+dream_urbandiet_diet <- merge(dream_urbandiet_diet, pairedFC_urbandiet_diet[,cols_2_add], by = "merged")
+
+dream_urbandiet_diet$regulation <- ifelse(dream_urbandiet_diet$adj.P.Val.signif != "ns", 
+                                         dream_urbandiet_diet$direction, "ns")
+
+rownames(dream_urbandiet_diet) <- dream_urbandiet_diet$merged
+
+dream_urbandiet_diet$cyto <- str_split_fixed(dream_urbandiet_diet$variable,"_",2)[,2]
+dream_urbandiet_diet$stim <- str_split_fixed(dream_urbandiet_diet$variable,"_",2)[,1]
+
+
+
+
+dream_urbandiet_diet$label <- ifelse(dream_urbandiet_diet$regulation == "ns","", dream_urbandiet_diet$adj.P.Val.signif)
+
+head(dream_urbandiet_diet)
+```
+
+
+
+```{r}
+list_sig_dream_urbandiet_diet <- list()
+
+for(i in unique(dream_urbandiet_diet$comparison)){
+  
+  print(i)
+  
+  list_sig_dream_urbandiet_diet[[i]] <- split(
+    subset(dream_urbandiet_diet, adj.P.Val.signif != "ns" & comparison == i)$variable,
+     subset(dream_urbandiet_diet, adj.P.Val.signif != "ns" & comparison == i)$regulation
+    )
+  
+}
+
+str(list_sig_dream_urbandiet_diet)
+```
+
+
+
+### Step 4: plots
+
+```{r}
+## factor table
+dream_urbandiet_diet$stim <- factor(dream_urbandiet_diet$stim, levels = stim_levels)
+
+dream_urbandiet_diet$cyto <- factor(dream_urbandiet_diet$cyto, levels = cyto_levels)
+
+dream_urbandiet_diet$comparison <- factor(dream_urbandiet_diet$comparison, levels = comparison_levels)
+```
+
+#### ... 1. triangle plot
+```{r}
+myshapes <- c("up" = 24, "down" = 25,"ns" = NA)
+max_val <- round(max(dream_urbandiet_diet$log2FC2),1)*1.2
+
+trafficsigns_urbandiet <- ggplot(dream_urbandiet_diet, aes(x= comparison, y= stim, fill= log2FC2))+
+  geom_point(size = 10, shape = 22, fill = "white")+
+  #geom_tile(fill = "white", color = "black")+
+  geom_point(size = 5, aes(shape = regulation))+
+  scale_shape_manual(values = myshapes)+
+  facet_wrap(.~cyto, nrow = 1, scales = "free_x")+
+  geom_text(aes(label = label), size = 4, fontface = "bold")+
+  theme_void()+
+  scale_fill_gradientn(colours = c("blue","white","red"), limits = c(-max_val, max_val),
+                       na.value = "white")+
+  theme(axis.text.x = element_text(angle = 90), 
+        axis.text.y = element_text())+
+  ggtitle("Urban diet")
+
+trafficsigns_urbandiet
+```
+#### ... 2. boxplot 
+```{r}
+urban_data_log_melt <-  subset(data_log_melt , diet == "urban_diet")
+```
+
+```{r}
+## create mean table
+sig_data_log_mean_dream <- subset(urban_data_log_melt, stim_cyto %in% unique(unlist(list_sig_dream_urbandiet_diet)) )
+
+
+
+sig_data_log_mean_dream <- sig_data_log_mean_dream %>% 
+                      group_by(stim_cyto, timepoint) %>% 
+                      summarize(median_value = median(log2value, na.rm = T))
+
+sig_data_log_mean_dream$timepoint <- factor(sig_data_log_mean_dream$timepoint, levels = c("t0","t1","t2"))
+
+## add columns
+sig_data_log_mean_dream$stim <-  str_split_fixed(sig_data_log_mean_dream$stim_cyto, "_", n= 2)[,1]
+sig_data_log_mean_dream$cyto <-  str_split_fixed(sig_data_log_mean_dream$stim_cyto, "_", n= 2)[,2]
+
+## factor
+sig_data_log_mean_dream$stim <- factor(sig_data_log_mean_dream$stim, levels = stim_levels)
+sig_data_log_mean_dream$cyto <- factor(sig_data_log_mean_dream$cyto, levels = cyto_levels)
+
+sig_data_log_mean_dream$PID <- "mean"
+
+
+
+sig_data_log_mean_urban <- sig_data_log_mean_dream
+
+```
+```{r}
+sig_data_log_melt_urban_dream <- subset(urban_data_log_melt, stim_cyto %in% unique(unlist(list_sig_dream_urbandiet_diet)) )
+
+## add columns
+sig_data_log_melt_urban_dream$stim <-  str_split_fixed(sig_data_log_melt_urban_dream$stim_cyto, "_", n= 2)[,1]
+sig_data_log_melt_urban_dream$cyto <-  str_split_fixed(sig_data_log_melt_urban_dream$stim_cyto, "_", n= 2)[,2]
+
+## factor
+sig_data_log_melt_urban_dream$stim <- factor(sig_data_log_melt_urban_dream$stim, levels = stim_levels)
+sig_data_log_melt_urban_dream$cyto <- factor(sig_data_log_melt_urban_dream$cyto, levels = cyto_levels)
+```
+
+```{r}
+urbandiet_main <- c("C.Albicans_TNF.A", 
+                    "C.Albicans_IL.6",
+                    "C.Albicans_IL.1b",
+                    "C.Albicans_IFN.g")
+
+sig_data_log_melt_urban_dream$timepoint <- factor(sig_data_log_melt_urban_dream$timepoint, levels = c("t0","t1","t2"))
+
+dream_line_box_urban.main <- ggplot(subset(sig_data_log_melt_urban_dream, stim_cyto %in% urbandiet_main), aes(x= timepoint, y= log2value, fill = timepoint))+
+ geom_boxplot(outlier.shape = NA)+
+  scale_fill_manual(values = col_timepoint)+
+  geom_line(color = "black", alpha = 0.3, aes(group = PID))+
+  geom_line(data = subset(sig_data_log_mean_urban, stim_cyto %in% urbandiet_main), 
+            aes(y= median_value, x= timepoint, group = PID),
+           color = col_diet_diet[["urban_diet"]],
+          size = 2)+
+  facet_wrap(stim~ cyto, scales = "free")+
+  theme_bw()+
+  scale_color_manual(values = col_timepoint) + ggtitle("urban diet")+
+  theme(aspect.ratio = 1.5)
+
+dream_line_box_urban.main
+```
+```{r fig.height=10, fig.width=10}
+dream_line_box_urban.sup <- ggplot(subset(sig_data_log_melt_urban_dream, !stim_cyto %in% urbandiet_main), aes(x= timepoint, y= log2value, fill = timepoint))+
+ geom_boxplot(outlier.shape = NA)+
+  scale_fill_manual(values = col_timepoint)+
+  geom_line(color = "black", alpha = 0.3, aes(group = PID))+
+  geom_line(data = subset(sig_data_log_mean_urban, !stim_cyto %in% urbandiet_main), 
+            aes(y= median_value, x= timepoint, group = PID),
+           color = col_diet_diet[["urban_diet"]],
+          size = 2)+
+  facet_wrap(stim~ cyto, scales = "free")+
+  theme_bw()+
+  scale_color_manual(values = col_timepoint) + ggtitle("urban diet")+
+  theme(aspect.ratio = 1.5)
+
+dream_line_box_urban.sup
+```
+
+
+
+# =====================
+
+# 5. RURAL DIET group
+
+
+## rural diet sample table
+```{r}
+table(sample_table$diet)
+```
+
+```{r}
+sample_table_ruraldiet <- subset(sample_table, diet == "rural_diet")
+```
+
+
+
+
+
+## data log rural diet
+```{r}
+data_log_ruraldiet <- data_log[match(as.character(sample_table_ruraldiet$ID), rownames(data_log)),]
+
+dim(data_log_ruraldiet)
+```
+
+# --------------------------------
+
+# Dream analysis - rural diet
+# ----------------------------------
+
+### Step 1: model and tables prep
+
+```{r}
+identical(rownames(data_log_ruraldiet), rownames(sample_table_ruraldiet))
+```
+
+
+contrasts table
+```{r}
+L <- makeContrastsDream(~ 0 + timepoint + BMI_t0 + Age + activity_sum_rank_scaled + (1|PID) , sample_table_ruraldiet,
+  contrasts = c(
+    t0_vs_t1 = "timepointt0 - timepointt1",
+    t0_vs_t2 = "timepointt0 - timepointt2",
+    t1_vs_t2 = "timepointt1 - timepointt2"
+  )
+)
+
+# Visualize contrast matrix
+plotContrasts(L)
+```
+
+
+
+### Step 2: Perform dream analysis
+
+### ... remove variables with no variance
+```{r}
+## exclude cols with zero variance
+sd_cols_ruraldiet <- apply(data_log_ruraldiet,2, sd)
+sd_cols_ruraldiet[sd_cols_ruraldiet == 0]
+
+data_log_ruraldiet <- data_log_ruraldiet[,which(sd_cols_ruraldiet != 0)]
+
+colnames(data_log_ruraldiet)
+```
+```{r}
+head(data_log_ruraldiet)
+```
+
+```{r}
+fitmm_ruraldiet_diet <- dream(t(data_log_ruraldiet), 
+                              ~ 0 + timepoint + BMI_t0 + Age + activity_sum_rank_scaled + (1|PID),
+                              sample_table_ruraldiet, L, ddf = "Kenward-Roger", useWeights = FALSE)
+
+fitmm_ruraldiet_diet <- eBayes(fitmm_ruraldiet_diet)
+```
+```{r}
+## create a list of results
+dream_ruraldiet_diet <- data.frame() # create empty dataframe for storage
+
+for(i in  colnames(L)){
+  print(i)
+  
+  tmpi <- variancePartition::topTable(fitmm_ruraldiet_diet, coef = i, number = Inf, adjust.method = "BH", sort.by = "p", lfc = 0)
+  
+  tmpi$comparison <- i
+  
+  tmpi$variable <- rownames(tmpi)
+  
+  tmpi <- as.data.frame(tmpi %>% add_significance(p.col = "adj.P.Val"))
+  
+  dream_ruraldiet_diet <- rbind(dream_ruraldiet_diet, tmpi)
+  
+}
+
+head(dream_ruraldiet_diet)
+```
+
+### Step 3: add paired log2FC
+```{r}
+identical(rownames(sample_table_ruraldiet), rownames(data_log_ruraldiet))
+```
+
+```{r}
+pairedFC_ruraldiet_diet <- data.frame()
+
+for ( i in colnames(L)){
+  print(i)
+  
+  ctr_condition = str_split_fixed(i, "_vs_",2)[,1]
+  test_condition = str_split_fixed(i, "_vs_",2)[,2]
+  
+  print(ctr_condition)
+  print(test_condition)
+  
+  ctrids <- rownames(subset(sample_table_ruraldiet, as.character(timepoint) == ctr_condition))
+  testids <- rownames(subset(sample_table_ruraldiet, as.character(timepoint) == test_condition))
+
+  tmpfc <- fcros::fcrosFCmat(t(data_log_ruraldiet), ctrids, testids, log2.opt = 0)
+
+  tmp_pairedFC <- data.frame(variable = tmpfc$idnames, 
+                                       FC = as.numeric(tmpfc$FC), 
+                                       FC2 = as.numeric(tmpfc$FC2))
+
+  tmp_pairedFC$log2FC <- log2(tmp_pairedFC$FC)
+  tmp_pairedFC$log2FC2 <- log2(tmp_pairedFC$FC2)
+
+  tmp_pairedFC$direction <- ifelse(tmp_pairedFC$log2FC2>0,"up",  "down")
+
+  tmp_pairedFC$comparison <- i
+  
+  pairedFC_ruraldiet_diet <- rbind(pairedFC_ruraldiet_diet, tmp_pairedFC)
+  
+}
+
+head(pairedFC_ruraldiet_diet)
+```
+
+
+```{r}
+### add paired FC
+pairedFC_ruraldiet_diet$merged <- paste0(pairedFC_ruraldiet_diet$variable,"_", pairedFC_ruraldiet_diet$comparison)
+
+dream_ruraldiet_diet$merged <- paste0(dream_ruraldiet_diet$variable,"_", dream_ruraldiet_diet$comparison)
+
+cols_2_add <- c("FC","FC2","log2FC","log2FC2","direction","merged")
+
+dream_ruraldiet_diet <- merge(dream_ruraldiet_diet, pairedFC_ruraldiet_diet[,cols_2_add], by = "merged")
+
+dream_ruraldiet_diet$regulation <- ifelse(dream_ruraldiet_diet$adj.P.Val.signif != "ns", 
+                                         dream_ruraldiet_diet$direction, "ns")
+
+rownames(dream_ruraldiet_diet) <- dream_ruraldiet_diet$merged
+
+dream_ruraldiet_diet$cyto <- str_split_fixed(dream_ruraldiet_diet$variable,"_",2)[,2]
+dream_ruraldiet_diet$stim <- str_split_fixed(dream_ruraldiet_diet$variable,"_",2)[,1]
+
+
+
+
+dream_ruraldiet_diet$label <- ifelse(dream_ruraldiet_diet$regulation == "ns","", dream_ruraldiet_diet$adj.P.Val.signif)
+
+head(dream_ruraldiet_diet)
+```
+
+
+
+```{r}
+list_sig_dream_ruraldiet_diet <- list()
+
+for(i in unique(dream_ruraldiet_diet$comparison)){
+  
+  print(i)
+  
+  list_sig_dream_ruraldiet_diet[[i]] <- split(
+    subset(dream_ruraldiet_diet, adj.P.Val.signif != "ns" & comparison == i)$variable,
+     subset(dream_ruraldiet_diet, adj.P.Val.signif != "ns" & comparison == i)$regulation
+    )
+  
+}
+
+str(list_sig_dream_ruraldiet_diet)
+```
+
+
+
+### Step 4: plots
+
+```{r}
+## factor table
+dream_ruraldiet_diet$stim <- factor(dream_ruraldiet_diet$stim, levels = stim_levels)
+
+dream_ruraldiet_diet$cyto <- factor(dream_ruraldiet_diet$cyto, levels = cyto_levels)
+
+dream_ruraldiet_diet$comparison <- factor(dream_ruraldiet_diet$comparison, levels = comparison_levels)
+```
+
+#### ... 1. triangle plot
+```{r}
+myshapes <- c("up" = 24, "down" = 25,"ns" = NA)
+max_val <- round(max(dream_ruraldiet_diet$log2FC2),1)*1.2
+
+trafficsigns_ruraldiet <- ggplot(dream_ruraldiet_diet, aes(x= comparison, y= stim, fill= log2FC2))+
+  geom_point(size = 10, shape = 22, fill = "white")+
+  #geom_tile(fill = "white", color = "black")+
+  geom_point(size = 5, aes(shape = regulation))+
+  scale_shape_manual(values = myshapes)+
+  facet_wrap(.~cyto, nrow = 1, scales = "free_x")+
+  geom_text(aes(label = label), size = 4, fontface = "bold")+
+  theme_void()+
+  scale_fill_gradientn(colours = c("blue","white","red"), limits = c(-max_val, max_val),
+                       na.value = "white")+
+  theme(axis.text.x = element_text(angle = 90), 
+        axis.text.y = element_text())+
+  ggtitle("rural diet")
+
+trafficsigns_ruraldiet
+```
+#### ... 2. boxplot 
+```{r}
+rural_data_log_melt <-  subset(data_log_melt , diet == "rural_diet")
+```
+
+```{r}
+## create mean table
+sig_data_log_mean_dream <- subset(rural_data_log_melt, stim_cyto %in% unique(unlist(list_sig_dream_ruraldiet_diet)) )
+
+
+
+sig_data_log_mean_dream <- sig_data_log_mean_dream %>% 
+                      group_by(stim_cyto, timepoint) %>% 
+                      summarize(median_value = median(log2value, na.rm = T))
+
+sig_data_log_mean_dream$timepoint <- factor(sig_data_log_mean_dream$timepoint, levels = c("t0","t1","t2"))
+
+## add columns
+sig_data_log_mean_dream$stim <-  str_split_fixed(sig_data_log_mean_dream$stim_cyto, "_", n= 2)[,1]
+sig_data_log_mean_dream$cyto <-  str_split_fixed(sig_data_log_mean_dream$stim_cyto, "_", n= 2)[,2]
+
+## factor
+sig_data_log_mean_dream$stim <- factor(sig_data_log_mean_dream$stim, levels = stim_levels)
+sig_data_log_mean_dream$cyto <- factor(sig_data_log_mean_dream$cyto, levels = cyto_levels)
+
+sig_data_log_mean_dream$PID <- "mean"
+
+
+
+sig_data_log_mean_ruraldiet <- sig_data_log_mean_dream
+
+```
+```{r}
+sig_data_log_melt_rural_dream <- subset(rural_data_log_melt, stim_cyto %in% unique(unlist(list_sig_dream_ruraldiet_diet)) )
+
+## add columns
+sig_data_log_melt_rural_dream$stim <-  str_split_fixed(sig_data_log_melt_rural_dream$stim_cyto, "_", n= 2)[,1]
+sig_data_log_melt_rural_dream$cyto <-  str_split_fixed(sig_data_log_melt_rural_dream$stim_cyto, "_", n= 2)[,2]
+
+## factor
+sig_data_log_melt_rural_dream$stim <- factor(sig_data_log_melt_rural_dream$stim, levels = stim_levels)
+sig_data_log_melt_rural_dream$cyto <- factor(sig_data_log_melt_rural_dream$cyto, levels = cyto_levels)
+```
+
+```{r}
+ruraldiet_main <- c("S.aureus_TNF.A", 
+                    "S.aureus_IL.1b",
+                    "MTB_IL.1b",
+                    "S.enteritidis_TNF.A")
+
+sig_data_log_melt_rural_dream$timepoint <- factor(sig_data_log_melt_rural_dream$timepoint, levels = c("t0","t1","t2"))
+
+dream_line_box_rural.main <- ggplot(subset(sig_data_log_melt_rural_dream, stim_cyto %in% ruraldiet_main), aes(x= timepoint, y= log2value, fill = timepoint))+
+ geom_boxplot(outlier.shape = NA)+
+  scale_fill_manual(values = col_timepoint)+
+  geom_line(color = "black", alpha = 0.3, aes(group = PID))+
+  geom_line(data = subset(sig_data_log_mean_ruraldiet, stim_cyto %in% ruraldiet_main), 
+            aes(y= median_value, x= timepoint, group = PID),
+           color = col_diet_diet[["rural_diet"]],
+          size = 2)+
+  facet_wrap(stim~ cyto, scales = "free")+
+  theme_bw()+
+  scale_color_manual(values = col_timepoint) + ggtitle("rural diet")+
+  theme(aspect.ratio = 1.5)
+
+dream_line_box_rural.main
+```
+```{r }
+dream_line_box_rural.sup <- ggplot(subset(sig_data_log_melt_rural_dream, !stim_cyto %in% ruraldiet_main), aes(x= timepoint, y= log2value, fill = timepoint))+
+ geom_boxplot(outlier.shape = NA)+
+  scale_fill_manual(values = col_timepoint)+
+  geom_line(color = "black", alpha = 0.3, aes(group = PID))+
+  geom_line(data = subset(sig_data_log_mean_ruraldiet, !stim_cyto %in% ruraldiet_main), 
+            aes(y= median_value, x= timepoint, group = PID),
+           color = col_diet_diet[["rural_diet"]],
+          size = 2)+
+  facet_wrap(stim~ cyto, scales = "free")+
+  theme_bw()+
+  scale_color_manual(values = col_timepoint) + ggtitle("rural diet")+
+  theme(aspect.ratio = 1.5)
+
+dream_line_box_rural.sup
+```
+# =========================
+
+
+# 6. MBEGE DIET group
+
+
+## Mbege diet sample table
+```{r}
+table(sample_table$diet)
+```
+
+```{r}
+sample_table_mbegediet <- subset(sample_table, diet == "MBEGE")
+```
+
+
+
+
+
+## data log mbege diet
+```{r}
+data_log_mbegediet <- data_log[match(as.character(sample_table_mbegediet$ID), rownames(data_log)),]
+
+dim(data_log_mbegediet)
+```
+
+# --------------------------------
+
+# Dream analysis - mbege diet
+# ----------------------------------
+
+### Step 1: model and tables prep
+
+```{r}
+identical(rownames(data_log_mbegediet), rownames(sample_table_mbegediet))
+```
+
+
+contrasts table
+```{r}
+L <- makeContrastsDream(~ 0 + timepoint + BMI_t0 + Age + activity_sum_rank_scaled + (1|PID) , sample_table_mbegediet,
+  contrasts = c(
+    t0_vs_t1 = "timepointt0 - timepointt1",
+    t0_vs_t2 = "timepointt0 - timepointt2",
+    t1_vs_t2 = "timepointt1 - timepointt2"
+  )
+)
+
+# Visualize contrast matrix
+plotContrasts(L)
+```
+
+
+
+### Step 2: Perform dream analysis
+
+### ... remove variables with no variance
+```{r}
+## exclude cols with zero variance
+sd_cols_mbegediet <- apply(data_log_mbegediet,2, sd)
+sd_cols_mbegediet[sd_cols_mbegediet == 0]
+
+data_log_mbegediet <- data_log_mbegediet[,which(sd_cols_mbegediet != 0)]
+
+colnames(data_log_mbegediet)
+```
+```{r}
+head(data_log_mbegediet)
+```
+
+```{r}
+fitmm_mbegediet_diet <- dream(t(data_log_mbegediet), 
+                              ~ 0 + timepoint + BMI_t0 + Age + activity_sum_rank_scaled + (1|PID),
+                              sample_table_mbegediet, L, ddf = "Kenward-Roger", useWeights = FALSE)
+
+fitmm_mbegediet_diet <- eBayes(fitmm_mbegediet_diet)
+```
+```{r}
+## create a list of results
+dream_mbegediet_diet <- data.frame() # create empty dataframe for storage
+
+for(i in  colnames(L)){
+  print(i)
+  
+  tmpi <- variancePartition::topTable(fitmm_mbegediet_diet, coef = i, number = Inf, adjust.method = "BH", sort.by = "p", lfc = 0)
+  
+  tmpi$comparison <- i
+  
+  tmpi$variable <- rownames(tmpi)
+  
+  tmpi <- as.data.frame(tmpi %>% add_significance(p.col = "adj.P.Val"))
+  
+  dream_mbegediet_diet <- rbind(dream_mbegediet_diet, tmpi)
+  
+}
+
+head(dream_mbegediet_diet)
+```
+
+### Step 3: add paired log2FC
+```{r}
+identical(rownames(sample_table_mbegediet), rownames(data_log_mbegediet))
+```
+
+```{r}
+pairedFC_mbegediet_diet <- data.frame()
+
+for ( i in colnames(L)){
+  print(i)
+  
+  ctr_condition = str_split_fixed(i, "_vs_",2)[,1]
+  test_condition = str_split_fixed(i, "_vs_",2)[,2]
+  
+  print(ctr_condition)
+  print(test_condition)
+  
+  ctrids <- rownames(subset(sample_table_mbegediet, as.character(timepoint) == ctr_condition))
+  testids <- rownames(subset(sample_table_mbegediet, as.character(timepoint) == test_condition))
+
+  tmpfc <- fcros::fcrosFCmat(t(data_log_mbegediet), ctrids, testids, log2.opt = 0)
+
+  tmp_pairedFC <- data.frame(variable = tmpfc$idnames, 
+                                       FC = as.numeric(tmpfc$FC), 
+                                       FC2 = as.numeric(tmpfc$FC2))
+
+  tmp_pairedFC$log2FC <- log2(tmp_pairedFC$FC)
+  tmp_pairedFC$log2FC2 <- log2(tmp_pairedFC$FC2)
+
+  tmp_pairedFC$direction <- ifelse(tmp_pairedFC$log2FC2>0,"up",  "down")
+
+  tmp_pairedFC$comparison <- i
+  
+  pairedFC_mbegediet_diet <- rbind(pairedFC_mbegediet_diet, tmp_pairedFC)
+  
+}
+
+head(pairedFC_mbegediet_diet)
+```
+
+
+```{r}
+### add paired FC
+pairedFC_mbegediet_diet$merged <- paste0(pairedFC_mbegediet_diet$variable,"_", pairedFC_mbegediet_diet$comparison)
+
+dream_mbegediet_diet$merged <- paste0(dream_mbegediet_diet$variable,"_", dream_mbegediet_diet$comparison)
+
+cols_2_add <- c("FC","FC2","log2FC","log2FC2","direction","merged")
+
+dream_mbegediet_diet <- merge(dream_mbegediet_diet, pairedFC_mbegediet_diet[,cols_2_add], by = "merged")
+
+dream_mbegediet_diet$regulation <- ifelse(dream_mbegediet_diet$adj.P.Val.signif != "ns", 
+                                         dream_mbegediet_diet$direction, "ns")
+
+rownames(dream_mbegediet_diet) <- dream_mbegediet_diet$merged
+
+dream_mbegediet_diet$cyto <- str_split_fixed(dream_mbegediet_diet$variable,"_",2)[,2]
+dream_mbegediet_diet$stim <- str_split_fixed(dream_mbegediet_diet$variable,"_",2)[,1]
+
+
+
+
+dream_mbegediet_diet$label <- ifelse(dream_mbegediet_diet$regulation == "ns","", dream_mbegediet_diet$adj.P.Val.signif)
+
+head(dream_mbegediet_diet)
+```
+
+
+
+```{r}
+list_sig_dream_mbegediet_diet <- list()
+
+for(i in unique(dream_mbegediet_diet$comparison)){
+  
+  print(i)
+  
+  list_sig_dream_mbegediet_diet[[i]] <- split(
+    subset(dream_mbegediet_diet, adj.P.Val.signif != "ns" & comparison == i)$variable,
+     subset(dream_mbegediet_diet, adj.P.Val.signif != "ns" & comparison == i)$regulation
+    )
+  
+}
+
+str(list_sig_dream_mbegediet_diet)
+```
+
+
+
+### Step 4: plots
+
+```{r}
+## factor table
+dream_mbegediet_diet$stim <- factor(dream_mbegediet_diet$stim, levels = stim_levels)
+
+dream_mbegediet_diet$cyto <- factor(dream_mbegediet_diet$cyto, levels = cyto_levels)
+
+dream_mbegediet_diet$comparison <- factor(dream_mbegediet_diet$comparison, levels = comparison_levels)
+```
+
+#### ... 1. triangle plot
+```{r}
+myshapes <- c("up" = 24, "down" = 25,"ns" = NA)
+max_val <- round(max(dream_mbegediet_diet$log2FC2),1)*1.2
+
+trafficsigns_mbegediet <- ggplot(dream_mbegediet_diet, aes(x= comparison, y= stim, fill= log2FC2))+
+  geom_point(size = 10, shape = 22, fill = "white")+
+  #geom_tile(fill = "white", color = "black")+
+  geom_point(size = 5, aes(shape = regulation))+
+  scale_shape_manual(values = myshapes)+
+  facet_wrap(.~cyto, nrow = 1, scales = "free_x")+
+  geom_text(aes(label = label), size = 4, fontface = "bold")+
+  theme_void()+
+  scale_fill_gradientn(colours = c("blue","white","red"), limits = c(-max_val, max_val),
+                       na.value = "white")+
+  theme(axis.text.x = element_text(angle = 90), 
+        axis.text.y = element_text())+
+  ggtitle("mbege diet")
+
+trafficsigns_mbegediet
+```
+#### ... 2. boxplot 
+```{r}
+mbege_data_log_melt <-  subset(data_log_melt , diet == "MBEGE")
+```
+
+```{r}
+## create mean table
+sig_data_log_mean_dream <- subset(mbege_data_log_melt, stim_cyto %in% unique(unlist(list_sig_dream_mbegediet_diet)) )
+
+
+
+sig_data_log_mean_dream <- sig_data_log_mean_dream %>% 
+                      group_by(stim_cyto, timepoint) %>% 
+                      summarize(median_value = median(log2value, na.rm = T))
+
+sig_data_log_mean_dream$timepoint <- factor(sig_data_log_mean_dream$timepoint, levels = c("t0","t1","t2"))
+
+## add columns
+sig_data_log_mean_dream$stim <-  str_split_fixed(sig_data_log_mean_dream$stim_cyto, "_", n= 2)[,1]
+sig_data_log_mean_dream$cyto <-  str_split_fixed(sig_data_log_mean_dream$stim_cyto, "_", n= 2)[,2]
+
+## factor
+sig_data_log_mean_dream$stim <- factor(sig_data_log_mean_dream$stim, levels = stim_levels)
+sig_data_log_mean_dream$cyto <- factor(sig_data_log_mean_dream$cyto, levels = cyto_levels)
+
+sig_data_log_mean_dream$PID <- "mean"
+
+
+
+sig_data_log_mean_mbegediet <- sig_data_log_mean_dream
+
+```
+```{r}
+sig_data_log_melt_mbege_dream <- subset(mbege_data_log_melt, stim_cyto %in% unique(unlist(list_sig_dream_mbegediet_diet)) )
+
+## add columns
+sig_data_log_melt_mbege_dream$stim <-  str_split_fixed(sig_data_log_melt_mbege_dream$stim_cyto, "_", n= 2)[,1]
+sig_data_log_melt_mbege_dream$cyto <-  str_split_fixed(sig_data_log_melt_mbege_dream$stim_cyto, "_", n= 2)[,2]
+
+## factor
+sig_data_log_melt_mbege_dream$stim <- factor(sig_data_log_melt_mbege_dream$stim, levels = stim_levels)
+sig_data_log_melt_mbege_dream$cyto <- factor(sig_data_log_melt_mbege_dream$cyto, levels = cyto_levels)
+```
+
+```{r}
+mbege_main <- c("S.aureus_IL.10",
+                "C.Albicans_IL.10",
+                    "C.Albicans_TNF.A",
+                    "C.Albicans_IL.1b")
+
+sig_data_log_melt_mbege_dream$timepoint <- factor(sig_data_log_melt_mbege_dream$timepoint, levels = c("t0","t1","t2"))
+
+dream_line_box_mbege.main <- ggplot(subset(sig_data_log_melt_mbege_dream, stim_cyto %in% mbege_main), aes(x= timepoint, y= log2value, fill = timepoint))+
+ geom_boxplot(outlier.shape = NA)+
+  scale_fill_manual(values = col_timepoint)+
+  geom_line(color = "black", alpha = 0.3, aes(group = PID))+
+  geom_line(data = subset(sig_data_log_mean_mbegediet, stim_cyto %in% mbege_main), 
+            aes(y= median_value, x= timepoint, group = PID),
+           color = col_diet_diet[["MBEGE"]],
+          size = 2)+
+  facet_wrap(stim~ cyto, scales = "free")+
+  theme_bw()+
+  scale_color_manual(values = col_timepoint) + ggtitle("mbege diet")+
+  theme(aspect.ratio = 1.5)
+
+dream_line_box_mbege.main
+```
+```{r fig.height=10, fig.width=10}
+dream_line_box_mbege.sup <- ggplot(subset(sig_data_log_melt_mbege_dream, !stim_cyto %in% mbege_main), aes(x= timepoint, y= log2value, fill = timepoint))+
+ geom_boxplot(outlier.shape = NA)+
+  scale_fill_manual(values = col_timepoint)+
+  geom_line(color = "black", alpha = 0.3, aes(group = PID))+
+  geom_line(data = subset(sig_data_log_mean_mbegediet, !stim_cyto %in% mbege_main), 
+            aes(y= median_value, x= timepoint, group = PID),
+           color = col_diet_diet[["MBEGE"]],
+          size = 2)+
+  facet_wrap(stim~ cyto, scales = "free")+
+  theme_bw()+
+  scale_color_manual(values = col_timepoint) + ggtitle("mbege diet")+
+  theme(aspect.ratio = 1.5)
+
+dream_line_box_mbege.sup
+```
+
+# ==============================
+
+# 7. Controls
+
+## 7.1. Controls urban diet (rural dwellers)
+
+
+## controls_r diet sample table
+```{r}
+table(sample_table$diet)
+```
+
+```{r}
+sample_table_urbandiet_ctr <- subset(sample_table, diet == "controls_r")
+```
+
+
+
+
+
+## data log urbandiet_ctr
+```{r}
+data_log_urbandiet_ctr<- data_log[match(as.character(sample_table_urbandiet_ctr$ID), rownames(data_log)),]
+
+dim(data_log_urbandiet_ctr)
+```
+
+# --------------------------------
+
+# Dream analysis - urbandiet_ctr
+# ----------------------------------
+
+### Step 1: model and tables prep
+
+```{r}
+identical(rownames(data_log_urbandiet_ctr), rownames(sample_table_urbandiet_ctr))
+```
+
+
+contrasts table
+```{r}
+L <- makeContrastsDream(~ 0 + timepoint + BMI_t0 + Age + activity_sum_rank_scaled + (1|PID) , sample_table_urbandiet_ctr,
+  contrasts = c(
+    t0_vs_t1 = "timepointt0 - timepointt1",
+    t0_vs_t2 = "timepointt0 - timepointt2",
+    t1_vs_t2 = "timepointt1 - timepointt2"
+  )
+)
+
+# Visualize contrast matrix
+plotContrasts(L)
+```
+
+
+
+### Step 2: Perform dream analysis
+
+### ... remove variables with no variance
+```{r}
+## exclude cols with zero variance
+sd_cols_urbandiet_ctr <- apply(data_log_urbandiet_ctr,2, sd)
+sd_cols_urbandiet_ctr[sd_cols_urbandiet_ctr == 0]
+
+data_log_urbandiet_ctr <- data_log_urbandiet_ctr[,which(sd_cols_urbandiet_ctr != 0)]
+
+colnames(data_log_urbandiet_ctr)
+```
+```{r}
+head(data_log_urbandiet_ctr)
+```
+
+```{r}
+fitmm_urbandiet_ctr <- dream(t(data_log_urbandiet_ctr), 
+                              ~ 0 + timepoint + BMI_t0 + Age + activity_sum_rank_scaled + (1|PID),
+                              sample_table_urbandiet_ctr, L, ddf = "Kenward-Roger", useWeights = FALSE)
+
+fitmm_urbandiet_ctr <- eBayes(fitmm_urbandiet_ctr)
+```
+```{r}
+## create a list of results
+dream_urbandiet_ctr <- data.frame() # create empty dataframe for storage
+
+for(i in  colnames(L)){
+  print(i)
+  
+  tmpi <- variancePartition::topTable(fitmm_urbandiet_ctr, coef = i, number = Inf, adjust.method = "BH", sort.by = "p", lfc = 0)
+  
+  tmpi$comparison <- i
+  
+  tmpi$variable <- rownames(tmpi)
+  
+  tmpi <- as.data.frame(tmpi %>% add_significance(p.col = "adj.P.Val"))
+  
+  dream_urbandiet_ctr <- rbind(dream_urbandiet_ctr, tmpi)
+  
+}
+
+head(dream_urbandiet_ctr)
+```
+
+### Step 3: add paired log2FC
+```{r}
+identical(rownames(sample_table_urbandiet_ctr), rownames(data_log_urbandiet_ctr))
+```
+
+```{r}
+pairedFC_urbandiet_ctr <- data.frame()
+
+for ( i in colnames(L)){
+  print(i)
+  
+  ctr_condition = str_split_fixed(i, "_vs_",2)[,1]
+  test_condition = str_split_fixed(i, "_vs_",2)[,2]
+  
+  print(ctr_condition)
+  print(test_condition)
+  
+  ctrids <- rownames(subset(sample_table_urbandiet_ctr, as.character(timepoint) == ctr_condition))
+  testids <- rownames(subset(sample_table_urbandiet_ctr, as.character(timepoint) == test_condition))
+
+  tmpfc <- fcros::fcrosFCmat(t(data_log_urbandiet_ctr), ctrids, testids, log2.opt = 0)
+
+  tmp_pairedFC <- data.frame(variable = tmpfc$idnames, 
+                                       FC = as.numeric(tmpfc$FC), 
+                                       FC2 = as.numeric(tmpfc$FC2))
+
+  tmp_pairedFC$log2FC <- log2(tmp_pairedFC$FC)
+  tmp_pairedFC$log2FC2 <- log2(tmp_pairedFC$FC2)
+
+  tmp_pairedFC$direction <- ifelse(tmp_pairedFC$log2FC2>0,"up",  "down")
+
+  tmp_pairedFC$comparison <- i
+  
+  pairedFC_urbandiet_ctr <- rbind(pairedFC_urbandiet_ctr, tmp_pairedFC)
+  
+}
+
+head(pairedFC_urbandiet_ctr)
+```
+
+
+```{r}
+### add paired FC
+pairedFC_urbandiet_ctr$merged <- paste0(pairedFC_urbandiet_ctr$variable,"_", pairedFC_urbandiet_ctr$comparison)
+
+dream_urbandiet_ctr$merged <- paste0(dream_urbandiet_ctr$variable,"_", dream_urbandiet_ctr$comparison)
+
+cols_2_add <- c("FC","FC2","log2FC","log2FC2","direction","merged")
+
+dream_urbandiet_ctr <- merge(dream_urbandiet_ctr, pairedFC_urbandiet_ctr[,cols_2_add], by = "merged")
+
+dream_urbandiet_ctr$regulation <- ifelse(dream_urbandiet_ctr$adj.P.Val.signif != "ns", 
+                                         dream_urbandiet_ctr$direction, "ns")
+
+rownames(dream_urbandiet_ctr) <- dream_urbandiet_ctr$merged
+
+dream_urbandiet_ctr$cyto <- str_split_fixed(dream_urbandiet_ctr$variable,"_",2)[,2]
+dream_urbandiet_ctr$stim <- str_split_fixed(dream_urbandiet_ctr$variable,"_",2)[,1]
+
+
+
+
+dream_urbandiet_ctr$label <- ifelse(dream_urbandiet_ctr$regulation == "ns","", dream_urbandiet_ctr$adj.P.Val.signif)
+
+head(dream_urbandiet_ctr)
+```
+
+
+
+```{r}
+list_sig_dream_urbandiet_ctr <- list()
+
+for(i in unique(dream_urbandiet_ctr$comparison)){
+  
+  print(i)
+  
+  list_sig_dream_urbandiet_ctr[[i]] <- split(
+    subset(dream_urbandiet_ctr, adj.P.Val.signif != "ns" & comparison == i)$variable,
+     subset(dream_urbandiet_ctr, adj.P.Val.signif != "ns" & comparison == i)$regulation
+    )
+  
+}
+
+str(list_sig_dream_urbandiet_ctr)
+```
+
+
+
+### Step 4: plots
+
+```{r}
+## factor table
+dream_urbandiet_ctr$stim <- factor(dream_urbandiet_ctr$stim, levels = stim_levels)
+
+dream_urbandiet_ctr$cyto <- factor(dream_urbandiet_ctr$cyto, levels = cyto_levels)
+
+dream_urbandiet_ctr$comparison <- factor(dream_urbandiet_ctr$comparison, levels = comparison_levels)
+```
+
+#### ... 1. triangle plot
+```{r}
+myshapes <- c("up" = 24, "down" = 25,"ns" = NA)
+max_val <- round(max(dream_urbandiet_ctr$log2FC2),1)*1.2
+
+trafficsigns_urbandiet_ctr <- ggplot(dream_urbandiet_ctr, aes(x= comparison, y= stim, fill= log2FC2))+
+  geom_point(size = 10, shape = 22, fill = "white")+
+  #geom_tile(fill = "white", color = "black")+
+  geom_point(size = 5, aes(shape = regulation))+
+  scale_shape_manual(values = myshapes)+
+  facet_wrap(.~cyto, nrow = 1, scales = "free_x")+
+  geom_text(aes(label = label), size = 4, fontface = "bold")+
+  theme_void()+
+  scale_fill_gradientn(colours = c("blue","white","red"), limits = c(-max_val, max_val),
+                       na.value = "white")+
+  theme(axis.text.x = element_text(angle = 90), 
+        axis.text.y = element_text())+
+  ggtitle("Urban diet CTR ")
+
+trafficsigns_urbandiet_ctr
+```
+#### ... 2. boxplot 
+```{r}
+urbndiet_ctr_data_log_melt <-  subset(data_log_melt , diet == "controls_r")
+```
+
+```{r}
+## create mean table
+sig_data_log_mean_dream <- subset(urbndiet_ctr_data_log_melt, stim_cyto %in% unique(unlist(list_sig_dream_urbandiet_ctr)) )
+
+
+
+sig_data_log_mean_dream <- sig_data_log_mean_dream %>% 
+                      group_by(stim_cyto, timepoint) %>% 
+                      summarize(median_value = median(log2value, na.rm = T))
+
+sig_data_log_mean_dream$timepoint <- factor(sig_data_log_mean_dream$timepoint, levels = c("t0","t1","t2"))
+
+## add columns
+sig_data_log_mean_dream$stim <-  str_split_fixed(sig_data_log_mean_dream$stim_cyto, "_", n= 2)[,1]
+sig_data_log_mean_dream$cyto <-  str_split_fixed(sig_data_log_mean_dream$stim_cyto, "_", n= 2)[,2]
+
+## factor
+sig_data_log_mean_dream$stim <- factor(sig_data_log_mean_dream$stim, levels = stim_levels)
+sig_data_log_mean_dream$cyto <- factor(sig_data_log_mean_dream$cyto, levels = cyto_levels)
+
+sig_data_log_mean_dream$PID <- "mean"
+
+
+
+sig_data_log_mean_urbandiet_ctr <- sig_data_log_mean_dream
+
+```
+```{r}
+sig_data_log_melt_urbandiet_ctr_dream <- subset(urbndiet_ctr_data_log_melt, stim_cyto %in% unique(unlist(list_sig_dream_urbandiet_ctr)) )
+
+## add columns
+sig_data_log_melt_urbandiet_ctr_dream$stim <-  str_split_fixed(sig_data_log_melt_urbandiet_ctr_dream$stim_cyto, "_", n= 2)[,1]
+sig_data_log_melt_urbandiet_ctr_dream$cyto <-  str_split_fixed(sig_data_log_melt_urbandiet_ctr_dream$stim_cyto, "_", n= 2)[,2]
+
+## factor
+sig_data_log_melt_urbandiet_ctr_dream$stim <- factor(sig_data_log_melt_urbandiet_ctr_dream$stim, levels = stim_levels)
+sig_data_log_melt_urbandiet_ctr_dream$cyto <- factor(sig_data_log_melt_urbandiet_ctr_dream$cyto, levels = cyto_levels)
+```
+
+```{r}
+urbandiet_ctr_main <- unique(unlist(list_sig_dream_urbandiet_ctr))
+
+sig_data_log_melt_urbandiet_ctr_dream$timepoint <- factor(sig_data_log_melt_urbandiet_ctr_dream$timepoint, levels = c("t0","t1","t2"))
+
+dream_line_box_urbandiet_ctr.main <- ggplot(subset(sig_data_log_melt_urbandiet_ctr_dream, stim_cyto %in% urbandiet_ctr_main), aes(x= timepoint, y= log2value, fill = timepoint))+
+ geom_boxplot(outlier.shape = NA)+
+  scale_fill_manual(values = col_timepoint)+
+  geom_line(color = "black", alpha = 0.3, aes(group = PID))+
+  geom_line(data = subset(sig_data_log_mean_mbegediet, stim_cyto %in% urbandiet_ctr_main), 
+            aes(y= median_value, x= timepoint, group = PID),
+           color = col_diet_diet[["urban_diet"]],
+          size = 2)+
+  facet_wrap(stim~ cyto, scales = "free")+
+  theme_bw()+
+  scale_color_manual(values = col_timepoint) + ggtitle("urbandiet_ctr_main")+
+  theme(aspect.ratio = 1.5)
+
+dream_line_box_urbandiet_ctr.main
+```
+
+# --------------------------
+## 7.2. Controls rural diet (urban dwellers)
+
+
+## controls_u diet sample table
+```{r}
+table(sample_table$diet)
+```
+
+```{r}
+sample_table_ruraldiet_ctr <- subset(sample_table, diet == "controls_u")
+```
+
+
+
+
+
+## data log ruraldiet_ctr
+```{r}
+data_log_ruraldiet_ctr<- data_log[match(as.character(sample_table_ruraldiet_ctr$ID), rownames(data_log)),]
+
+dim(data_log_ruraldiet_ctr)
+```
+
+# --------------------------------
+
+# Dream analysis - ruraldiet_ctr
+# ----------------------------------
+
+### Step 1: model and tables prep
+
+```{r}
+identical(rownames(data_log_ruraldiet_ctr), rownames(sample_table_ruraldiet_ctr))
+```
+
+
+contrasts table
+```{r}
+L <- makeContrastsDream(~ 0 + timepoint + BMI_t0 + Age + activity_sum_rank_scaled + (1|PID) , sample_table_ruraldiet_ctr,
+  contrasts = c(
+    t0_vs_t1 = "timepointt0 - timepointt1",
+    t0_vs_t2 = "timepointt0 - timepointt2",
+    t1_vs_t2 = "timepointt1 - timepointt2"
+  )
+)
+
+# Visualize contrast matrix
+plotContrasts(L)
+```
+
+
+
+### Step 2: Perform dream analysis
+
+### ... remove variables with no variance
+```{r}
+## exclude cols with zero variance
+sd_cols_ruraldiet_ctr <- apply(data_log_ruraldiet_ctr,2, sd)
+sd_cols_ruraldiet_ctr[sd_cols_ruraldiet_ctr == 0]
+
+data_log_ruraldiet_ctr <- data_log_ruraldiet_ctr[,which(sd_cols_ruraldiet_ctr != 0)]
+
+colnames(data_log_ruraldiet_ctr)
+```
+```{r}
+head(data_log_ruraldiet_ctr)
+```
+
+```{r}
+fitmm_ruraldiet_ctr <- dream(t(data_log_ruraldiet_ctr), 
+                              ~ 0 + timepoint + BMI_t0 + Age + activity_sum_rank_scaled + (1|PID),
+                              sample_table_ruraldiet_ctr, L, ddf = "Kenward-Roger", useWeights = FALSE)
+
+fitmm_ruraldiet_ctr <- eBayes(fitmm_ruraldiet_ctr)
+```
+```{r}
+## create a list of results
+dream_ruraldiet_ctr <- data.frame() # create empty dataframe for storage
+
+for(i in  colnames(L)){
+  print(i)
+  
+  tmpi <- variancePartition::topTable(fitmm_ruraldiet_ctr, coef = i, number = Inf, adjust.method = "BH", sort.by = "p", lfc = 0)
+  
+  tmpi$comparison <- i
+  
+  tmpi$variable <- rownames(tmpi)
+  
+  tmpi <- as.data.frame(tmpi %>% add_significance(p.col = "adj.P.Val"))
+  
+  dream_ruraldiet_ctr <- rbind(dream_ruraldiet_ctr, tmpi)
+  
+}
+
+head(dream_ruraldiet_ctr)
+```
+
+### Step 3: add paired log2FC
+```{r}
+identical(rownames(sample_table_ruraldiet_ctr), rownames(data_log_ruraldiet_ctr))
+```
+
+```{r}
+pairedFC_ruraldiet_ctr <- data.frame()
+
+for ( i in colnames(L)){
+  print(i)
+  
+  ctr_condition = str_split_fixed(i, "_vs_",2)[,1]
+  test_condition = str_split_fixed(i, "_vs_",2)[,2]
+  
+  print(ctr_condition)
+  print(test_condition)
+  
+  ctrids <- rownames(subset(sample_table_ruraldiet_ctr, as.character(timepoint) == ctr_condition))
+  testids <- rownames(subset(sample_table_ruraldiet_ctr, as.character(timepoint) == test_condition))
+
+  tmpfc <- fcros::fcrosFCmat(t(data_log_ruraldiet_ctr), ctrids, testids, log2.opt = 0)
+
+  tmp_pairedFC <- data.frame(variable = tmpfc$idnames, 
+                                       FC = as.numeric(tmpfc$FC), 
+                                       FC2 = as.numeric(tmpfc$FC2))
+
+  tmp_pairedFC$log2FC <- log2(tmp_pairedFC$FC)
+  tmp_pairedFC$log2FC2 <- log2(tmp_pairedFC$FC2)
+
+  tmp_pairedFC$direction <- ifelse(tmp_pairedFC$log2FC2>0,"up",  "down")
+
+  tmp_pairedFC$comparison <- i
+  
+  pairedFC_ruraldiet_ctr <- rbind(pairedFC_ruraldiet_ctr, tmp_pairedFC)
+  
+}
+
+head(pairedFC_ruraldiet_ctr)
+```
+
+
+```{r}
+### add paired FC
+pairedFC_ruraldiet_ctr$merged <- paste0(pairedFC_ruraldiet_ctr$variable,"_", pairedFC_ruraldiet_ctr$comparison)
+
+dream_ruraldiet_ctr$merged <- paste0(dream_ruraldiet_ctr$variable,"_", dream_ruraldiet_ctr$comparison)
+
+cols_2_add <- c("FC","FC2","log2FC","log2FC2","direction","merged")
+
+dream_ruraldiet_ctr <- merge(dream_ruraldiet_ctr, pairedFC_ruraldiet_ctr[,cols_2_add], by = "merged")
+
+dream_ruraldiet_ctr$regulation <- ifelse(dream_ruraldiet_ctr$adj.P.Val.signif != "ns", 
+                                         dream_ruraldiet_ctr$direction, "ns")
+
+rownames(dream_ruraldiet_ctr) <- dream_ruraldiet_ctr$merged
+
+dream_ruraldiet_ctr$cyto <- str_split_fixed(dream_ruraldiet_ctr$variable,"_",2)[,2]
+dream_ruraldiet_ctr$stim <- str_split_fixed(dream_ruraldiet_ctr$variable,"_",2)[,1]
+
+
+
+
+dream_ruraldiet_ctr$label <- ifelse(dream_ruraldiet_ctr$regulation == "ns","", dream_ruraldiet_ctr$adj.P.Val.signif)
+
+head(dream_ruraldiet_ctr)
+```
+
+
+
+```{r}
+list_sig_dream_ruraldiet_ctr <- list()
+
+for(i in unique(dream_ruraldiet_ctr$comparison)){
+  
+  print(i)
+  
+  list_sig_dream_ruraldiet_ctr[[i]] <- split(
+    subset(dream_ruraldiet_ctr, adj.P.Val.signif != "ns" & comparison == i)$variable,
+     subset(dream_ruraldiet_ctr, adj.P.Val.signif != "ns" & comparison == i)$regulation
+    )
+  
+}
+
+str(list_sig_dream_ruraldiet_ctr)
+```
+
+
+
+### Step 4: plots
+no plots to plot. No sig. results
+```{r}
+## factor table
+dream_ruraldiet_ctr$stim <- factor(dream_ruraldiet_ctr$stim, levels = stim_levels)
+
+dream_ruraldiet_ctr$cyto <- factor(dream_ruraldiet_ctr$cyto, levels = cyto_levels)
+
+dream_ruraldiet_ctr$comparison <- factor(dream_ruraldiet_ctr$comparison, levels = comparison_levels)
+```
+
+#### ... 1. triangle plot
+```{r}
+myshapes <- c("up" = 24, "down" = 25,"ns" = NA)
+max_val <- round(max(dream_ruraldiet_ctr$log2FC2),1)*1.2
+
+trafficsigns_ruraldiet_ctr <- ggplot(dream_ruraldiet_ctr, aes(x= comparison, y= stim, fill= log2FC2))+
+  geom_point(size = 10, shape = 22, fill = "white")+
+  #geom_tile(fill = "white", color = "black")+
+  geom_point(size = 5, aes(shape = regulation))+
+  scale_shape_manual(values = myshapes)+
+  facet_wrap(.~cyto, nrow = 1, scales = "free_x")+
+  geom_text(aes(label = label), size = 4, fontface = "bold")+
+  theme_void()+
+  scale_fill_gradientn(colours = c("blue","white","red"), limits = c(-max_val, max_val),
+                       na.value = "white")+
+  theme(axis.text.x = element_text(angle = 90), 
+        axis.text.y = element_text())+
+  ggtitle("Urban diet CTR ")
+
+trafficsigns_ruraldiet_ctr
+```
+
+
+
+
+
+
+
+
+
+# =====================
+# 8. Summary files
+```{r}
+cols_file <- c("stim","cyto", "t", "AveExpr","P.Value","adj.P.Val","adj.P.Val.signif","log2FC","log2FC2", "regulation")
+
+list_summary_tables <- list(urban_diet = dream_urbandiet_diet[,cols_file], 
+                            rural_diet = dream_ruraldiet_diet[,cols_file], 
+                            MBEGE = dream_mbegediet_diet[,cols_file], 
+                            controls_urban_dwellers = dream_ruraldiet_ctr[,cols_file], 
+                            controls_rural_dwellers = dream_urbandiet_ctr[,cols_file])
+
+
+
+summary_all <- do.call(rbind, Map(cbind, diet = names(list_summary_tables), list_summary_tables))
+
+head(summary_all)
+```
+
+```{r}
+## rename diets
+summary_all <- summary_all %>%
+  mutate(Diet = case_when(
+    diet == "urban_diet" ~ "Western Diet",
+    diet == "rural_diet" ~ "Traditional Diet",
+    diet == "MBEGE" ~ "Fermented banana beverage", 
+    diet == "controls_urban_dwellers" ~ "Urban Dwellers Control", 
+    diet == "controls_rural_dwellers" ~ "Rural Dwellers Control"
+  ))
+
+summary_all$diet <- NULL
+
+summary_all$Diet <- factor(summary_all$Diet, levels = c("Western Diet", 
+                                                        "Traditional Diet", 
+                                                        "Fermented banana beverage", 
+                                                        "Urban Dwellers Control", 
+                                                        "Rural Dwellers Control"))
+```
+
+
+```{r}
+summary_all <- summary_all[order(summary_all$Diet, summary_all$adj.P.Val, decreasing = F),]
+
+
+#write.xlsx(summary_all, paste0("../Exvivo_data_DietStudy_Mar24/",Sys.Date(),"_exvivocyto_summary_stat_padjperparameter.xlsx"), asTable = T)
+```
+
+
+
+
+# ====================
+
+# 9. Session info
+```{r}
+sessionInfo()
+```
+

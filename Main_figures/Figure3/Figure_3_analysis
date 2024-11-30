@@ -1,0 +1,3511 @@
+---
+title: "Olink analysis"
+author: "TP"
+date: "2024-11-20"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 0. preperation
+## 0.1. packages
+
+```{r}
+library(variancePartition)
+library(pheatmap)
+library(fcros)
+library(wordcloud)
+library(enrichR)
+library(fgsea)
+library(ggplot2)
+library(dplyr)
+library(ggpubr)
+library(openxlsx)
+library(naniar)
+library(rstatix)
+library(patchwork)
+library(ggsci)
+library(RColorBrewer)
+library(tidyverse)
+library(ggrepel)
+library(clusterProfiler)
+library(ggdendro)
+library(ggthemes)
+library(tm)
+```
+## functions
+
+
+### ... PCA
+```{r}
+plotPCAnew  <-        function (pca_input = myinput, # rows are the variables
+                                ntop = "all",
+                                xPC = 1, 
+                                yPC = 2,
+                                point_size=3,
+                                color,
+                                anno_colour,
+                                scale = FALSE, 
+                                anno = sample_annotation, 
+                                shape = NULL,
+                                title="PCA", 
+                                label = NULL, 
+                                label_subset = NULL, 
+                                facet=NULL,
+                                id.col = "ID" ,
+                                color.ellipse = TRUE
+){
+  
+  require(ggplot2)
+  require(stats)
+  require(ggrepel)
+  
+  if(!is.data.frame(pca_input) & !is.matrix(pca_input) ){
+    vst_matrix <-as.matrix(assay(pca_input))
+  }else{
+    vst_matrix <- as.matrix(pca_input)
+  }
+  
+  
+  
+  if(ntop=="all"){
+    pca <- prcomp(t(vst_matrix), scale = scale) 
+  }else if (is.numeric(ntop)){
+    # select the ntop genes by variance
+    select <- order(rowVars(vst_matrix), decreasing=TRUE)[c(1:ntop)]
+    pca <- prcomp(t(vst_matrix[select,]), scale. = scale )
+  } else if (is.character(ntop)){
+    pca <- prcomp(t(vst_matrix[ntop,]), scale. = scale)
+  } else {
+    print("option for ntop is not valid")
+  }
+  
+  
+  #calculate explained variance per PC
+  explVar <- pca$sdev^2/sum(pca$sdev^2)
+  # transform variance to percent
+  percentVar <- round(100 * explVar[c(xPC,yPC)], digits=1)
+
+  # make sure annotation table is ordered the saame as the data
+  anno <- anno[match(rownames(pca$x),anno[[id.col]]),]
+
+  # Define data for plotting  
+  pcaData <- data.frame(xPC=pca$x[,xPC], 
+                        yPC=pca$x[,yPC], 
+                        color = anno[[color]],
+                        name= as.character(anno[[id.col]]),
+                        stringsAsFactors = F)
+  
+  #plot PCA
+  
+  if (!is.null(facet)==TRUE){
+    pcaData$facet_var<-anno[[facet]]
+  } else {
+    pcaData<-pcaData
+  }
+  
+  if(is.factor(pcaData$color) || is.character(pcaData$color)|| is.integer(pcaData$color)){
+    if(is.null(shape)==TRUE){
+      pca_plot <- ggplot(pcaData, aes(x = xPC, y = yPC)) +
+        geom_point(size =point_size, aes(color= color))
+    }else{
+      pcaData$shape = anno[[shape]]
+      pca_plot <- ggplot(pcaData, aes(x = xPC, y = yPC)) +
+        geom_point(size =point_size, aes(color=color, shape=shape)) +
+        scale_shape_discrete(name=shape)
+    }
+    
+    if(is.null(anno_colour[1])==TRUE){
+      pca_plot <- pca_plot + scale_color_discrete(name=color)
+    }else{
+      pca_plot <- pca_plot + scale_color_manual(values=anno_colour, name=color)
+    }
+    
+  }else if(is.numeric(pcaData$color)){
+    if(is.null(shape) == TRUE){
+      pca_plot <- ggplot(pcaData, aes(x = xPC, y = yPC)) +
+        geom_point(size =point_size, aes(color=color)) +
+        scale_color_gradientn(colours = bluered(100),name=color)
+    }else{
+      pcaData$shape = anno[[shape]]
+      pca_plot <- ggplot(pcaData, aes(x = xPC, y = yPC)) +
+        geom_point(size =point_size, aes(colour=color, shape=shape)) +
+        scale_color_gradientn(colours = bluered(100),name=color)+
+        scale_shape_discrete(name=shape)
+    }
+  }
+  
+  
+  
+  # adds a label to the plot. To label only specific points, put them in the arument label_subset
+  if (!is.null(label) == TRUE){
+    pcaData$label <- anno[[label]]
+    if(!is.null(label_subset) == TRUE){
+      pcaData_labeled <- pcaData[pcaData$label %in% label_subset,]
+    } else {
+      pcaData_labeled <- pcaData
+    }
+    pca_plot <- pca_plot + 
+      geom_text_repel(data = pcaData_labeled, aes(label = label), nudge_x = 2, nudge_y = 2, colour = "black") 
+  }
+  
+  pca_plot <- pca_plot+
+    xlab(paste0("PC ",xPC, ": ", percentVar[1], "% variance")) +
+    ylab(paste0("PC ",yPC,": ", percentVar[2], "% variance")) +
+    coord_fixed()+
+    theme_classic()+        
+    theme(aspect.ratio = 1)+
+    ggtitle(title)
+  
+  
+  
+  #add facet if required
+  if (is.null(facet)==TRUE){
+    pca_plot<-pca_plot
+  } else {
+    pca_plot<-pca_plot + facet_wrap(.~facet_var)
+  }
+
+  
+  #add groups ellipse
+  if (color.ellipse==TRUE){
+    pca_plot <- pca_plot + stat_ellipse(type = "norm",aes(color=color))
+  }
+  
+  pca_plot
+}
+```
+
+
+## ... limma batch removal
+```{r}
+limmaBatchEffectRemoval <- function(input, # log transformed data
+                                    batchfactor, # name of batch effect column in sample_table
+                                    batchfactor_2=NULL,
+                                    modelfactor, 
+                                    anno_table = sample_table){ # name of model effect column in sample_table
+
+  # rlog-transformed input
+  if (is.matrix(input)|is.data.frame(input)){
+   x  <- as.matrix(input) 
+  } else {
+   x <- as.matrix(assay(input)) 
+  }
+  
+  
+
+  # design matrix
+  model <- model.matrix(~anno_table[,c(modelfactor)])
+
+  # run batch remocal function
+  if(is.numeric(anno_table[,colnames(anno_table) == batchfactor[1]])==T){
+    as.data.frame(removeBatchEffect(x,
+                                    covariates = anno_table[,colnames(sample_table) %in% batchfactor],
+                                    design = model))
+  }else{
+    if(is.null(batchfactor_2)){
+      as.data.frame(removeBatchEffect(x=x,
+                                      batch = anno_table[,colnames(anno_table) == batchfactor],
+                                      design = model))
+    }else{
+      as.data.frame(removeBatchEffect(x=x,
+                                      batch = anno_table[,colnames(anno_table) == batchfactor],
+                                      batch2 = anno_table[,colnames(anno_table) == batchfactor_2],
+                                      design = model))
+    }
+  }
+}
+
+```
+
+
+### ... dictinct color 
+```{r}
+# Ref https://eleanormaclure.files.wordpress.com/2011/03/colour-coding.pdf
+# Ref http://www.iscc-archive.org/pdf/PC54_1724_001.pdf
+# Ref https://github.com/EmilHvitfeldt/r-color-palettes
+# Ref https://graphicdesign.stackexchange.com/q/3682
+
+#' @title Colour palettes suitable for 20+ categories
+#'
+#' @description
+#' Available palettes (max colors) are "brewerPlus" (41), "kelly" (20) and "greenArmytage" (25).
+#'
+#' - "brewerPlus" is an arbitrary expansion of the "Paired" and "Dark2"
+#' colorbrewer palettes. The philosophy behind this expansion was to ensure
+#' that similar colours are far apart, and the earlier colours are attractive.
+#' - "kelly" is based on the 22-colour palette developed by Kenneth Kelly but
+#'  with white and black starting colours removed. This palette is ordered
+#'  such that the first colours are most distinct.
+#' - "greenArmytage" is based on a 26-colour palette proposed by Paul
+#' Green-Armytage, with black removed. This palette is not ordered by maximum
+#' contrast.
+#'
+#' @details
+#' Hex color codes for 'kelly' and 'greenArmytage' palettes are copied and
+#' slightly modified from the Polychrome R package:
+#' i.e. Polychrome::kelly.colors() and Polychrome::green.armytage.colors()
+#'
+#' Please consider also citing Coombes 2019
+#' \doi{10.18637/jss.v090.c01}
+#' if you use either of these palettes.
+#'
+#' See the Polychrome reference manual for more information:
+#' \url{https://CRAN.R-project.org/package=Polychrome}
+#'
+#' @param n number of colours to return
+#' @param pal palette name, one of "brewerPlus", "kelly", "greenArmytage"
+#' @param add
+#' colour to append to end of palette, as colour n+1,
+#' lightgrey by default for the use as "other" taxa in comp_barplot,
+#' or NA for no additional colour.
+#'
+#' @return vector of colours
+#' @export
+#' @examples
+#' brewerPlus <- distinct_palette()
+#' scales::show_col(brewerPlus)
+#'
+#' kelly <- distinct_palette(pal = "kelly")
+#' scales::show_col(kelly)
+#'
+#' greenArmytage <- distinct_palette(pal = "greenArmytage")
+#' scales::show_col(greenArmytage)
+distinct_palette <- function(n = NA, pal = "brewerPlus", add = "lightgrey") {
+  stopifnot(rlang::is_string(pal))
+  stopifnot(rlang::is_scalar_integerish(n) || identical(n, NA))
+  stopifnot(rlang::is_na(add) || is.character(add) || is.numeric(add))
+
+  # define valid palettes matched to retrieval functions
+  palList <- list(
+    brewerPlus = palBrewerPlus,
+    kelly = palKelly,
+    greenArmytage = palGreenArmytage
+  )
+
+  # match palette request
+  pal <- rlang::arg_match0(arg = pal, values = names(palList))
+
+  # get full palette
+  palFun <- palList[[pal]]
+  palCols <- palFun()
+
+  # get n colors
+  if (!rlang::is_na(n)) {
+    if (n > length(palCols)) {
+      stop("Palette '", pal, "' has ", length(palCols), " colors, not ", n)
+    }
+    palCols <- palCols[seq_len(n)]
+  }
+
+  # add last colour e.g. lightgrey default if requested
+  if (!identical(add, NA)) {
+    grDevices::col2rgb(add)
+    palCols <- c(palCols, add)
+  }
+  return(palCols)
+}
+
+palBrewerPlus <- function() {
+  c(
+    # first 12 colours generated with:
+    # RColorBrewer::brewer.pal(n = 12, name = "Paired")
+    "#A6CEE3", "#1F78B4", "#B2DF8A", "#33A02C", "#FB9A99", "#E31A1C",
+    "#FDBF6F", "#FF7F00", "#CAB2D6", "#6A3D9A", "#FFFF99", "#B15928",
+    # vivid interlude
+    "#1ff8ff", # a bright blue
+    # "#FDFF00", # lemon (clashes with #FFFF99 on some screens)
+    # "#00FF00", # lime (indistinguishable from bright blue on some screens)
+    # next 8 colours generated with:
+    # RColorBrewer::brewer.pal(n = 8, "Dark2")
+    "#1B9E77", "#D95F02", "#7570B3", "#E7298A",
+    "#66A61E", "#E6AB02", "#A6761D", "#666666",
+    # list below generated with iwanthue: all colours soft kmeans 20
+    # with a couple of arbitrary tweaks by me
+    "#4b6a53",
+    "#b249d5",
+    "#7edc45",
+    "#5c47b8",
+    "#cfd251",
+    "#ff69b4", # hotpink
+    "#69c86c",
+    "#cd3e50",
+    "#83d5af",
+    "#da6130",
+    "#5e79b2",
+    "#c29545",
+    "#532a5a",
+    "#5f7b35",
+    "#c497cf",
+    "#773a27",
+    "#7cb9cb",
+    "#594e50",
+    "#d3c4a8",
+    "#c17e7f"
+  )
+}
+
+palKelly <- function() {
+  c(
+    # "#f2f3f4", "#222222", # white and black removed
+    "#f3c300", "#875692", "#f38400", "#a1caf1", "#be0032", "#c2b280",
+    "#848482", "#008856", "#e68fac", "#0067a5", "#f99379", "#604e97",
+    "#f6a600", "#b3446c", "#dcd300", "#882d17", "#8db600", "#654522",
+    "#e25822", "#2b3d26"
+  )
+}
+
+palGreenArmytage <- function() {
+  c(
+    "#F0A3FF", "#0075DC", "#993F00", "#4C005C", # "#191919", # black removed
+    "#005C31", "#2BCE48", "#FFCC99", "#808080", "#94FFB5", "#8F7C00",
+    "#9DCC00", "#C20088", "#003380", "#19A405", "#FFA8BB", "#426600",
+    "#FF0010", "#5EF1F2", "#00998F", "#E0FF66", "#100AFF", "#990000",
+    "#FFFF80", "#FFE100", "#FF5000"
+  )
+}
+```
+
+
+## colors 
+```{r}
+
+  
+## colors 
+colors_vars <- c("Residuals" = "lightgray", 
+                 "timepoint"  = "turquoise",
+                 "Age" = "plum4",
+                 "BMI_baseline" = "cornflowerblue",
+                 "PID"  = "peachpuff2", 
+                 "activity_sum_rank_scaled" = "aquamarine4")
+
+color_clusters <- c(brewer.pal(n = 9,name = "Set1"),
+                    brewer.pal(n = 8,name = "Set2"),
+                    brewer.pal(n = 12,name = "Set3"),
+                    brewer.pal(n = 12,name = "Paired"),
+                    brewer.pal(n = 9,name = "Pastel1"),
+                    brewer.pal(n = 8,name = "Pastel2"),
+                    brewer.pal(n = 8,name = "Accent"))
+
+# col_timepoint
+col_timepoint<- brewer.pal(n = 3, name = "Dark2")
+names(col_timepoint)<-c("t0", "t1", "t2")
+
+col_diet_diet <- c("#0564ad", "#b91c1c", "#f1c232")
+names(col_diet_diet) <- c("rural_diet", "urban_diet", "MBEGE")
+```
+
+
+## 0.2. Olink annotation
+```{r}
+olink_annotation <- read.delim("./olink_anno.txt", sep ="\t")
+olink_annotation <- olink_annotation[!duplicated(olink_annotation$Assay),]
+rownames(olink_annotation) <- olink_annotation$Assay
+
+# replace space with dot
+olink_annotation$Uniprot.ID <- gsub(" ",".",olink_annotation$Uniprot.ID)
+
+head(olink_annotation)
+```
+```{r}
+unique(olink_annotation$Panel)
+```
+```{r}
+olink_annotation <-  olink_annotation %>%
+  mutate(panel_short = case_when(
+    Panel == "Olink Target 96 Cardiometabolic(v.3604)" ~ "cardiometabo",
+    Panel == "Olink Target 96 Inflammation(v.3023)" ~ "inflammation"
+  ))
+
+unique(olink_annotation$panel_short)
+```
+
+```{r}
+dim(olink_annotation)
+```
+```{r}
+## remove special chr
+olink_annotation$simple_protein_name <- gsub("[[:punct:]]", "", olink_annotation$Assay)
+
+## remove gaps
+olink_annotation$simple_protein_name  <- gsub(" ","", olink_annotation$simple_protein_name )
+
+olink_annotation$simple_protein_name[1:20]
+```
+
+```{r}
+olink_annotation_list <- split(olink_annotation$simple_protein_name, olink_annotation$panel_short)
+
+str(olink_annotation_list)
+```
+
+
+## 0.3. Info protein atlas
+## ** import protein.atals
+```{r}
+protein.atals <- read_tsv("./240710_proteinatlas.tsv", col_names = T)
+
+# replace space with _ in colnames
+colnames(protein.atals) <- gsub(" ","_", colnames(protein.atals))
+head(protein.atals)
+```
+```{r}
+colnames(protein.atals)
+```
+
+#### protein annotation
+```{r}
+## create a list of functions
+proteins_anno <- list()
+for (i in unique(protein.atals$Uniprot)){
+  terms <- unique(c(unlist(str_split(subset(protein.atals, Uniprot == i)$Biological_process, ",", n= Inf)), unlist(str_split(subset(protein.atals, Uniprot == i)$Molecular_function, ",", n= Inf))))
+  terms <- terms[!is.na(terms)]
+  terms <- trimws(terms)
+  
+  ## anotate tnf superfamily
+  addterms <- ifelse(grepl("TNF",subset(protein.atals, Uniprot == i)$Gene_description),"TNF superfamily", NA)
+  
+  finalterms <-  unique(c(terms, addterms))
+  proteins_anno$terms[[i]] <- finalterms[!is.na(finalterms)]
+  
+  diseas <- unique(c(unlist(str_split(subset(protein.atals, Uniprot == i)$Disease_involvement, ",", n= Inf))))
+  diseas <- diseas[!is.na(diseas)]
+  diseas <- trimws(diseas)
+   proteins_anno$disease[[i]] <- unique(diseas)
+}
+
+
+```
+
+
+```{r}
+proteins_anno_term <- reshape2::melt(proteins_anno$terms)
+colnames(proteins_anno_term) <- c("term", "Uniprot.ID")
+proteins_anno_term <- proteins_anno_term[,c("Uniprot.ID","term")]
+
+proteins_anno_disease <- reshape2::melt(proteins_anno$disease)
+colnames(proteins_anno_disease) <- c("disease", "Uniprot.ID")
+
+head(proteins_anno_disease)
+```
+
+```{r}
+proteins_anno_term_wide <- as.data.frame.matrix(table(proteins_anno_term))
+
+head(proteins_anno_term_wide)
+
+```
+
+```{r}
+dim(proteins_anno_term_wide)
+```
+```{r}
+proteins_anno_disease_wide <- as.data.frame.matrix(table(proteins_anno_disease))
+
+head(proteins_anno_disease_wide)
+
+```
+
+ 
+
+# ==========================
+# 1. Urban diet
+
+DSR - dietry study rural indindividuals : Urban diet
+
+#### load data
+#### Metadata
+```{r}
+sample_table_urbandiet_diet <- read.csv("./241129_sample_table_urbandiet_diet.csv", row.names = 1)
+
+head(sample_table_urbandiet_diet)
+```
+
+#### Olink data
+```{r}
+olink_urbandiet_diet <- read.csv("./241129_olink_urbandiet_diet.csv", row.names = 1, check.names = FALSE)
+
+head(olink_urbandiet_diet)
+```
+
+
+
+
+#### factor levels
+```{r}
+sample_table_urbandiet_diet$timepoint <- factor(sample_table_urbandiet_diet$timepoint, levels = c("t0","t1","t2"))
+
+unique(sample_table_urbandiet_diet$timepoint)
+
+```
+
+```{r}
+ggplot(sample_table_urbandiet_diet, aes(x= timepoint, y= PID, color = Group))+
+  geom_point()+
+  geom_line(aes(group = PID))
+```
+```{r}
+table(sample_table_urbandiet_diet$Group, sample_table_urbandiet_diet$timepoint)
+```
+
+
+```{r}
+all(sapply(olink_urbandiet_diet, class) == "numeric")
+```
+### match row names
+```{r}
+olink_urbandiet_diet <- olink_urbandiet_diet[match(rownames(sample_table_urbandiet_diet), rownames(olink_urbandiet_diet)),]
+
+identical(rownames(olink_urbandiet_diet), rownames(sample_table_urbandiet_diet))
+```
+
+
+
+```{r}
+data_melt_urbandiet <- reshape2::melt(as.matrix(olink_urbandiet_diet), id.var = "row.names")
+colnames(data_melt_urbandiet) <- c("SampleID","Assay","NPX")
+
+data_melt_urbandiet <- merge(data_melt_urbandiet, sample_table_urbandiet_diet, all.x = T, by.x = "SampleID", by.y = "ID")
+
+head(data_melt_urbandiet)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ---------------------------------
+
+# Variance partition - Urban diet
+# ----------------------------------
+https://bioconductor.org/packages/release/bioc/vignettes/variancePartition/inst/doc/variancePartition.html
+
+## Variance partition: Urban diet
+
+
+
+
+
+### step1: find metabolites contributing to more than 5% variation for each time comparison
+```{r}
+form <- ~ Age + (1 | PID) + timepoint_numeric + BMI_t0 + activity_sum_rank_scaled
+
+varpart_features_urbandiet <- list()
+
+for ( i in c("t0_vs_t1","t1_vs_t2","t0_vs_t2")){
+  tp1 <- str_split_fixed(i,"_vs_",2)[,1]
+  tp2 <- str_split_fixed(i,"_vs_",2)[,2]
+  
+  tmpinfo <- subset(sample_table_urbandiet_diet, timepoint %in% c(tp1,tp2))
+  
+  ## make timepoint variable into numeric
+  tmpinfo$timepoint_numeric <- as.numeric(gsub("t","",tmpinfo$timepoint))
+  
+  tmpdata <- olink_urbandiet_diet[match(tmpinfo$ID, rownames(olink_urbandiet_diet)),]
+  tmpdata <- t(tmpdata)
+  
+  if(identical(tmpinfo$ID, colnames(tmpdata))){
+    print("identical")
+  } else{
+    stop("error, info and data samples not ordered correctly")
+  }
+  
+  
+  tmpvarpart <- fitExtractVarPartModel(tmpdata, form, tmpinfo)
+  
+  # sort variables (i.e. columns) by median fraction
+#       of variance explained
+tmpvarpart <- sortCols(tmpvarpart)
+
+varpart_features_urbandiet[[i]]$varpart <- tmpvarpart
+varpart_features_urbandiet[[i]]$info <- tmpinfo
+varpart_features_urbandiet[[i]]$data <- tmpdata
+
+}
+```
+
+### step2: plot results
+```{r}
+## colors 
+colors_vars <- c("Residuals" = "lightgray",
+                 "timepoint_numeric"  = "turquoise",
+                 "Age" = "purple",
+                 "BMI_t0" = "cornflowerblue",
+                 "PID" = "lightyellow",
+                 "activity_sum_rank_scaled" = "tomato3")
+```
+
+```{r}
+list_parvar_plots_urbandiet <- list()
+
+for (i in names(varpart_features_urbandiet)){
+  print(i)
+  
+tmp_df <- as.data.frame(varpart_features_urbandiet[[i]]$varpart)
+tmp_df$protein <- rownames(tmp_df)
+tmp_df <- reshape2::melt(tmp_df, id.vars = "protein")
+
+timepoint_var <- subset(tmp_df, variable == "timepoint_numeric")$value
+names(timepoint_var) <- as.character(subset(tmp_df, variable == "timepoint_numeric")$protein)
+
+tmp_df$timepoint <- timepoint_var[match(tmp_df$protein, names(timepoint_var))]
+tmp_df$value100 <- 100*tmp_df$value
+
+## factor
+tmp_df$variable <- factor(tmp_df$variable, levels = rev(c("timepoint_numeric","Age","BMI_t0","activity_sum_rank_scaled", "PID","Residuals")))
+
+
+tmp_df <- tmp_df[order(tmp_df$timepoint, decreasing = T),]
+
+
+# barplot
+tmpplot <- ggplot(subset(tmp_df, timepoint >0.05), aes(x = reorder(protein, timepoint), y = value100, fill = variable))+
+  geom_bar(stat = "identity", position = "stack")+
+  coord_flip()+
+  scale_fill_manual(values = colors_vars)+
+ xlab("")+
+  ylab("% Explained variance")+
+  ggtitle("t0vst1 Top contributions (>5%) - timepoint")
+
+
+list_parvar_plots_urbandiet[["df"]][[i]] <- tmp_df
+list_parvar_plots_urbandiet[["plot"]][[i]] <- tmpplot
+}
+```
+```{r fig.width=20, fig.height=10}
+wrap_plots(list_parvar_plots_urbandiet$plot, nrow = 1, guides = "collect")
+```
+
+### step3: extract metabolites contributing >5% for downstream analysis
+```{r}
+for (i in names(list_parvar_plots_urbandiet$df)){
+  print(i)
+  
+  tmp_df <- NULL
+  
+  tmp_df <- list_parvar_plots_urbandiet$df[[i]]
+  
+  var_metabo <- unique(tmp_df[tmp_df$timepoint>0.05,"protein"])
+
+  print(paste0(round(length(var_metabo)*100/length(unique(tmp_df$protein)),digits = 2),"% proteins taken for analysis for comparison ",i))
+  
+  
+  ## add to varpart_features_urbandiet
+  varpart_features_urbandiet[[i]]$vars <- var_metabo
+}
+```
+
+
+
+### step4: perform dream analysis
+```{r}
+list_dream_urbandiet <- list()
+
+for (i in names(varpart_features_urbandiet)){
+  print(i)
+  
+  myinfo <- varpart_features_urbandiet[[i]]$info
+  ## factor for the variables present
+  myinfo$timepoint <- factor(myinfo$timepoint, levels = unique(myinfo$timepoint))
+  
+  mydata <- varpart_features_urbandiet[[i]]$data
+  ## filter variables
+  mydata <- mydata[which(rownames(mydata) %in% as.character( varpart_features_urbandiet[[i]]$vars)),]
+  
+  mycontrasts <- c(
+    t0_vs_t1 = "timepointt0 - timepointt1",
+    t0_vs_t2 = "timepointt0 - timepointt2",
+    t1_vs_t2 = "timepointt1 - timepointt2"
+  )
+  
+  
+  L <- makeContrastsDream(~ 0 + timepoint + BMI_t0 + Age + activity_sum_rank_scaled + (1|PID) , myinfo,
+  contrasts = mycontrasts[names(mycontrasts) == i]
+)
+
+# Visualize contrast matrix
+plotContrasts(L)
+
+fitmm_dream <- dream(mydata, ~ 0 + timepoint + BMI_t0 + Age + activity_sum_rank_scaled + (1|PID), myinfo, L)
+
+fitmm_dream <- eBayes(fitmm_dream)
+
+dream_res <- variancePartition::topTable(fitmm_dream, coef = i, number = Inf, adjust.method = "BH", sort.by = "p", lfc = 0)
+
+dream_res$protein <- rownames(dream_res)
+
+print(nrow(dream_res[dream_res$adj.P.Val <=0.05,]))
+
+list_dream_urbandiet[[i]] <- dream_res
+}
+```
+```{r}
+res_dream_urbandiet <- do.call(rbind, Map(cbind, comparison = names(list_dream_urbandiet),list_dream_urbandiet))
+
+head(res_dream_urbandiet)
+```
+```{r}
+## add sig
+res_dream_urbandiet <- as.data.frame(res_dream_urbandiet %>% add_significance(p.col = "adj.P.Val"))
+```
+
+### step5: calculate paire fc
+
+```{r}
+pairedFC_urbandiet_diet <- data.frame()
+
+for(i in names(varpart_features_urbandiet)){
+  print(i)
+  
+  ctr_condition = str_split_fixed(i, "_vs_",2)[,1]
+  test_condition = str_split_fixed(i, "_vs_",2)[,2]
+  
+  print(ctr_condition)
+  print(test_condition)
+  
+  ctrids <- rownames(subset(varpart_features_urbandiet[[i]]$info, 
+                            as.character(timepoint) == ctr_condition))
+  testids <- rownames(subset(varpart_features_urbandiet[[i]]$info, 
+                             as.character(timepoint) == test_condition))
+
+  
+  
+  tmpfc <- fcros::fcrosFCmat(varpart_features_urbandiet[[i]]$data, ctrids, testids, log2.opt = 0)
+
+  tmp_pairedFC <- data.frame(protein = tmpfc$idnames, 
+                                       FC = as.numeric(tmpfc$FC), 
+                                       FC2 = as.numeric(tmpfc$FC2))
+
+  tmp_pairedFC$log2FC <- log2(tmp_pairedFC$FC)
+  tmp_pairedFC$log2FC2 <- log2(tmp_pairedFC$FC2)
+
+  tmp_pairedFC$direction <- ifelse(tmp_pairedFC$log2FC2>0,"up",  "down")
+
+  tmp_pairedFC$comparison <- i
+  
+  pairedFC_urbandiet_diet <- rbind(pairedFC_urbandiet_diet, tmp_pairedFC)
+}
+```
+### step6: combine dream and paireFC results
+```{r}
+fc_threshold <- 1
+```
+
+```{r}
+### add paired FC
+pairedFC_urbandiet_diet$merged <- paste0(pairedFC_urbandiet_diet$protein,"_", pairedFC_urbandiet_diet$comparison)
+
+res_dream_urbandiet$merged <- paste0(res_dream_urbandiet$protein,"_", res_dream_urbandiet$comparison)
+
+cols_2_add <- c("FC","FC2","log2FC","log2FC2","direction","merged")
+
+res_dream_urbandiet <- merge(res_dream_urbandiet, pairedFC_urbandiet_diet[,cols_2_add], by = "merged")
+
+res_dream_urbandiet$regulation <- ifelse(res_dream_urbandiet$adj.P.Val.signif != "ns" & abs(res_dream_urbandiet$log2FC2) > log2(fc_threshold), res_dream_urbandiet$direction, "ns")
+
+rownames(res_dream_urbandiet) <- res_dream_urbandiet$merged
+
+res_dream_urbandiet$protein_simple <- gsub("[[:punct:]]", "", res_dream_urbandiet$protein)
+
+res_dream_urbandiet$panel <- olink_annotation[match(as.character( res_dream_urbandiet$protein_simple), as.character(olink_annotation$simple_protein_name)),"panel_short"]
+
+res_dream_urbandiet$panel <- factor(res_dream_urbandiet$panel, levels = c("cardiometabo", "inflammation"))
+
+head(res_dream_urbandiet)
+```
+
+### step7: list of sig metabolites
+```{r}
+list_sig_dream_urbandiet_diet <- list()
+
+for(i in unique(res_dream_urbandiet$comparison)){
+  
+  print(i)
+  
+  list_sig_dream_urbandiet_diet[[i]] <- split(
+    subset(res_dream_urbandiet, regulation != "ns" & comparison == i)$protein,
+     subset(res_dream_urbandiet, regulation != "ns" & comparison == i)$regulation
+    )
+  
+}
+
+str(list_sig_dream_urbandiet_diet)
+```
+
+
+
+### step8 compare to previous res: SKIP
+
+
+### step9: plots
+count
+```{r}
+count_da_urbandiet <- as.data.frame(res_dream_urbandiet %>% 
+                                      group_by(comparison) %>% 
+                                      summarize(up = sum(regulation == "up"),
+                                                down = sum(regulation == "down")))
+
+
+count_da_urbandiet <- reshape2::melt(count_da_urbandiet)
+
+count_da_urbandiet
+```
+
+```{r}
+count_da_urbandiet$comparison <- factor(count_da_urbandiet$comparison, levels = c("t0_vs_t1","t1_vs_t2","t0_vs_t2"))
+
+ggplot(count_da_urbandiet, aes(x= comparison, y= value, fill = variable))+
+  geom_bar(stat = "identity",color = "black", position = "stack")+
+  scale_fill_manual(values = c("up" = "tomato3","down" = "cornflowerblue"))+
+  geom_text(vjust = 1, position = position_stack(), aes(label = value))+
+  theme_bw()+
+  ggtitle("Urban diet")+
+  theme(aspect.ratio = 1.5)
+```
+
+### triangle - dream results
+
+
+```{r fig.height=8, fig.width=5}
+
+plotdf  <- subset(res_dream_urbandiet, adj.P.Val.signif != "ns")
+
+plotdf$comparison <- factor(plotdf$comparison, levels = c("t0_vs_t1","t1_vs_t2","t0_vs_t2"))
+
+max.val <- round(max(abs(plotdf$log2FC2), na.rm = T),1)*1.2
+
+plotdf$order_2 <- ifelse(plotdf$comparison == "t0_vs_t1",plotdf$log2FC2,0)
+
+plotdf <- plotdf[order(plotdf$panel, plotdf$order_2, decreasing = F),]
+
+plotdf$order_3 <- 1:nrow(plotdf)
+
+
+
+## triangle
+triangle_urbandiet_diet <- 
+  ggplot(plotdf, aes(y = reorder(protein, log2FC2), x = ""))+
+  geom_point( aes(fill = log2FC2, shape = regulation),size = 3)+
+  scale_shape_manual(values = c("up" = 24, "down" = 25))+
+  scale_fill_gradientn(colours = c("blue","white","red"), 
+                       limits = c(-max.val, max.val),
+                       guide = guide_colorbar(frame.colour = "black", 
+                                              ticks.colour = "black"))+
+  facet_grid(panel~ comparison, scales = "free_y", space = "free")+
+  #scale_y_reordered()+
+  theme_bw()+
+  theme( axis.title =  element_blank())+
+  geom_text(aes(label = adj.P.Val.signif), size = 5)
+
+triangle_urbandiet_diet
+
+```
+
+
+
+
+# =======================================
+
+# 2. Rural diet
+
+DSu - diety study urban indindividuals : Rural diet
+
+#### load data
+
+#### ... metadata
+```{r}
+sample_table_ruraldiet_diet <- read.csv("./241129_sample_table_ruraldiet_diet.csv", row.names = 1)
+
+head(sample_table_ruraldiet_diet)
+```
+
+#### .. olink data
+```{r}
+olink_ruraldiet_diet <- read.csv("./241129_olink_ruraldiet_diet.csv", row.names = 1, check.names = FALSE)
+
+head(olink_ruraldiet_diet)
+```
+
+
+#### factor levels
+```{r}
+sample_table_ruraldiet_diet$timepoint <- factor(sample_table_ruraldiet_diet$timepoint, levels = c("t0","t1","t2"))
+
+unique(sample_table_ruraldiet_diet$timepoint)
+
+```
+
+```{r}
+ggplot(sample_table_ruraldiet_diet, aes(x= timepoint, y= PID, color = Group))+
+  geom_point()+
+  geom_line(aes(group = PID))
+```
+```{r}
+table(sample_table_ruraldiet_diet$Group, sample_table_ruraldiet_diet$timepoint)
+```
+
+
+```{r}
+all(sapply(olink_ruraldiet_diet, class) == "numeric")
+```
+```{r}
+dim(olink_ruraldiet_diet)
+```
+
+#### ... vis miss values
+```{r}
+vis_miss(olink_ruraldiet_diet)
+```
+### Prepare data for test
+
+
+
+
+```{r}
+data_melt_ruraldiet <- reshape2::melt(as.matrix(olink_ruraldiet_diet), id.var = "row.names")
+
+colnames(data_melt_ruraldiet) <- c("SampleID","Assay","NPX")
+
+data_melt_ruraldiet <- merge(data_melt_ruraldiet, sample_table_ruraldiet_diet, all.x = T, by.x = "SampleID", by.y = "ID")
+
+
+head(data_melt_ruraldiet)
+```
+
+```{r}
+olink_ruraldiet_diet <- olink_ruraldiet_diet[match(rownames(sample_table_ruraldiet_diet), rownames(olink_ruraldiet_diet)),]
+```
+
+
+
+
+# ---------------------------------
+
+# Variance partition - Rural diet
+# ----------------------------------
+
+https://bioconductor.org/packages/release/bioc/vignettes/variancePartition/inst/doc/variancePartition.html
+
+## Variance partition: Urban diet
+
+### step1: find metabolites contributing to more than 5% variation for each time comparison
+```{r}
+form <- ~ Age + (1 | PID) + timepoint_numeric + BMI_t0 + activity_sum_rank_scaled
+
+varpart_features_ruraldiet <- list()
+
+for ( i in c("t0_vs_t1","t1_vs_t2","t0_vs_t2")){
+  tp1 <- str_split_fixed(i,"_vs_",2)[,1]
+  tp2 <- str_split_fixed(i,"_vs_",2)[,2]
+  
+  tmpinfo <- subset(sample_table_ruraldiet_diet, timepoint %in% c(tp1,tp2))
+  
+  ## make timepoint variable into numeric
+  tmpinfo$timepoint_numeric <- as.numeric(gsub("t","",tmpinfo$timepoint))
+  
+  tmpdata <- olink_ruraldiet_diet[match(tmpinfo$ID, rownames(olink_ruraldiet_diet)),]
+  tmpdata <- t(tmpdata)
+  
+  if(identical(tmpinfo$ID, colnames(tmpdata))){
+    print("identical")
+  } else{
+    stop("error, info and data samples not ordered correctly")
+  }
+  
+  
+  tmpvarpart <- fitExtractVarPartModel(tmpdata, form, tmpinfo)
+  
+  # sort variables (i.e. columns) by median fraction
+#       of variance explained
+tmpvarpart <- sortCols(tmpvarpart)
+
+varpart_features_ruraldiet[[i]]$varpart <- tmpvarpart
+varpart_features_ruraldiet[[i]]$info <- tmpinfo
+varpart_features_ruraldiet[[i]]$data <- tmpdata
+
+}
+```
+
+### step2: plot results
+```{r}
+## colors 
+colors_vars <- c("Residuals" = "lightgray",
+                 "timepoint_numeric"  = "turquoise",
+                 "Age" = "purple",
+                 "BMI_t0" = "cornflowerblue",
+                 "PID" = "lightyellow",
+                 "activity_sum_rank_scaled" = "tomato3")
+```
+
+```{r}
+list_parvar_plots_ruraldiet <- list()
+
+for (i in names(varpart_features_ruraldiet)){
+  print(i)
+  
+tmp_df <- as.data.frame(varpart_features_ruraldiet[[i]]$varpart)
+tmp_df$protein <- rownames(tmp_df)
+tmp_df <- reshape2::melt(tmp_df, id.vars = "protein")
+
+timepoint_var <- subset(tmp_df, variable == "timepoint_numeric")$value
+names(timepoint_var) <- as.character(subset(tmp_df, variable == "timepoint_numeric")$protein)
+
+tmp_df$timepoint <- timepoint_var[match(tmp_df$protein, names(timepoint_var))]
+tmp_df$value100 <- 100*tmp_df$value
+
+## factor
+tmp_df$variable <- factor(tmp_df$variable, levels = rev(c("timepoint_numeric","Age","BMI_t0","activity_sum_rank_scaled", "PID","Residuals")))
+
+
+tmp_df <- tmp_df[order(tmp_df$timepoint, decreasing = T),]
+
+
+# barplot
+tmpplot <- ggplot(subset(tmp_df, timepoint >0.05), aes(x = reorder(protein, timepoint), y = value100, fill = variable))+
+  geom_bar(stat = "identity", position = "stack")+
+  coord_flip()+
+  scale_fill_manual(values = colors_vars)+
+ xlab("")+
+  ylab("% Explained variance")+
+  ggtitle("t0vst1 Top contributions (>5%) - timepoint")
+
+
+list_parvar_plots_ruraldiet[["df"]][[i]] <- tmp_df
+list_parvar_plots_ruraldiet[["plot"]][[i]] <- tmpplot
+}
+```
+```{r fig.width=20, fig.height=10}
+wrap_plots(list_parvar_plots_ruraldiet$plot, nrow = 1, guides = "collect")
+```
+
+### step3: extract metabolites contributing >5% for downstream analysis
+```{r}
+for (i in names(list_parvar_plots_ruraldiet$df)){
+  print(i)
+  
+  tmp_df <- NULL
+  
+  tmp_df <- list_parvar_plots_ruraldiet$df[[i]]
+  
+  var_metabo <- unique(tmp_df[tmp_df$timepoint>0.05,"protein"])
+
+  print(paste0(round(length(var_metabo)*100/length(unique(tmp_df$protein)),digits = 2),"% proteins taken for analysis for comparison ",i))
+  
+  
+  ## add to varpart_features_ruraldiet
+  varpart_features_ruraldiet[[i]]$vars <- var_metabo
+}
+```
+
+
+
+### step4: perform dream analysis
+```{r}
+list_dream_ruraldiet <- list()
+
+for (i in names(varpart_features_ruraldiet)){
+  print(i)
+  
+  myinfo <- varpart_features_ruraldiet[[i]]$info
+  ## factor for the variables present
+  myinfo$timepoint <- factor(myinfo$timepoint, levels = unique(myinfo$timepoint))
+  
+  mydata <- varpart_features_ruraldiet[[i]]$data
+  ## filter variables
+  mydata <- mydata[which(rownames(mydata) %in% as.character( varpart_features_ruraldiet[[i]]$vars)),]
+  
+  mycontrasts <- c(
+    t0_vs_t1 = "timepointt0 - timepointt1",
+    t0_vs_t2 = "timepointt0 - timepointt2",
+    t1_vs_t2 = "timepointt1 - timepointt2"
+  )
+  
+  
+  L <- makeContrastsDream(~ 0 + timepoint + BMI_t0 + Age + activity_sum_rank_scaled + (1|PID) , myinfo,
+  contrasts = mycontrasts[names(mycontrasts) == i]
+)
+
+# Visualize contrast matrix
+plotContrasts(L)
+
+fitmm_dream <- dream(mydata, ~ 0 + timepoint + BMI_t0 + Age + activity_sum_rank_scaled + (1|PID), myinfo, L)
+
+fitmm_dream <- eBayes(fitmm_dream)
+
+dream_res <- variancePartition::topTable(fitmm_dream, coef = i, number = Inf, adjust.method = "BH", sort.by = "p", lfc = 0)
+
+dream_res$protein <- rownames(dream_res)
+
+print(nrow(dream_res[dream_res$adj.P.Val <=0.05,]))
+
+list_dream_ruraldiet[[i]] <- dream_res
+}
+```
+```{r}
+res_dream_ruraldiet <- do.call(rbind, Map(cbind, comparison = names(list_dream_ruraldiet),list_dream_ruraldiet))
+
+head(res_dream_ruraldiet)
+```
+```{r}
+## add sig
+res_dream_ruraldiet <- as.data.frame(res_dream_ruraldiet %>% add_significance(p.col = "adj.P.Val"))
+```
+
+### step5: calculate paire fc
+
+```{r}
+pairedFC_ruraldiet_diet <- data.frame()
+
+for(i in names(varpart_features_ruraldiet)){
+  print(i)
+  
+  ctr_condition = str_split_fixed(i, "_vs_",2)[,1]
+  test_condition = str_split_fixed(i, "_vs_",2)[,2]
+  
+  print(ctr_condition)
+  print(test_condition)
+  
+  ctrids <- rownames(subset(varpart_features_ruraldiet[[i]]$info, 
+                            as.character(timepoint) == ctr_condition))
+  testids <- rownames(subset(varpart_features_ruraldiet[[i]]$info, 
+                             as.character(timepoint) == test_condition))
+
+  
+  
+  tmpfc <- fcros::fcrosFCmat(varpart_features_ruraldiet[[i]]$data, ctrids, testids, log2.opt = 0)
+
+  tmp_pairedFC <- data.frame(protein = tmpfc$idnames, 
+                                       FC = as.numeric(tmpfc$FC), 
+                                       FC2 = as.numeric(tmpfc$FC2))
+
+  tmp_pairedFC$log2FC <- log2(tmp_pairedFC$FC)
+  tmp_pairedFC$log2FC2 <- log2(tmp_pairedFC$FC2)
+
+  tmp_pairedFC$direction <- ifelse(tmp_pairedFC$log2FC2>0,"up",  "down")
+
+  tmp_pairedFC$comparison <- i
+  
+  pairedFC_ruraldiet_diet <- rbind(pairedFC_ruraldiet_diet, tmp_pairedFC)
+}
+```
+### step6: combine dream and paireFC results
+```{r}
+fc_threshold <- 1
+```
+
+```{r}
+### add paired FC
+pairedFC_ruraldiet_diet$merged <- paste0(pairedFC_ruraldiet_diet$protein,"_", pairedFC_ruraldiet_diet$comparison)
+
+res_dream_ruraldiet$merged <- paste0(res_dream_ruraldiet$protein,"_", res_dream_ruraldiet$comparison)
+
+cols_2_add <- c("FC","FC2","log2FC","log2FC2","direction","merged")
+
+res_dream_ruraldiet <- merge(res_dream_ruraldiet, pairedFC_ruraldiet_diet[,cols_2_add], by = "merged")
+
+res_dream_ruraldiet$regulation <- ifelse(res_dream_ruraldiet$adj.P.Val.signif != "ns" & abs(res_dream_ruraldiet$log2FC2) > log2(fc_threshold), res_dream_ruraldiet$direction, "ns")
+
+rownames(res_dream_ruraldiet) <- res_dream_ruraldiet$merged
+
+res_dream_ruraldiet$protein_simple <- gsub("[[:punct:]]", "", res_dream_ruraldiet$protein)
+
+res_dream_ruraldiet$panel <- olink_annotation[match(as.character( res_dream_ruraldiet$protein_simple), as.character(olink_annotation$simple_protein_name)),"panel_short"]
+
+res_dream_ruraldiet$panel <- factor(res_dream_ruraldiet$panel, levels = c("cardiometabo", "inflammation"))
+
+head(res_dream_ruraldiet)
+```
+
+### step7: list of sig metabolites
+```{r}
+list_sig_dream_ruraldiet_diet <- list()
+
+for(i in unique(res_dream_ruraldiet$comparison)){
+  
+  print(i)
+  
+  list_sig_dream_ruraldiet_diet[[i]] <- split(
+    subset(res_dream_ruraldiet, regulation != "ns" & comparison == i)$protein,
+     subset(res_dream_ruraldiet, regulation != "ns" & comparison == i)$regulation
+    )
+  
+}
+
+str(list_sig_dream_ruraldiet_diet)
+```
+
+
+
+### step8 compare to previous res: SKIP
+
+
+### step9: plots
+count
+```{r}
+count_da_ruraldiet <- as.data.frame(res_dream_ruraldiet %>% 
+                                      group_by(comparison) %>% 
+                                      summarize(up = sum(regulation == "up"),
+                                                down = sum(regulation == "down")))
+
+
+count_da_ruraldiet <- reshape2::melt(count_da_ruraldiet)
+
+count_da_ruraldiet
+```
+
+```{r}
+count_da_ruraldiet$comparison <- factor(count_da_ruraldiet$comparison, levels = c("t0_vs_t1","t1_vs_t2","t0_vs_t2"))
+
+ggplot(count_da_ruraldiet, aes(x= comparison, y= value, fill = variable))+
+  geom_bar(stat = "identity",color = "black", position = "stack")+
+  scale_fill_manual(values = c("up" = "tomato3","down" = "cornflowerblue"))+
+  geom_text(vjust = 1, position = position_stack(), aes(label = value))+
+  theme_bw()+
+  ggtitle("Urban diet")+
+  theme(aspect.ratio = 1.5)
+```
+
+### triangle - dream results
+
+
+```{r fig.height=8, fig.width=5}
+
+plotdf  <- subset(res_dream_ruraldiet, adj.P.Val.signif != "ns")
+
+plotdf$comparison <- factor(plotdf$comparison, levels = c("t0_vs_t1","t1_vs_t2","t0_vs_t2"))
+
+max.val <- round(max(abs(plotdf$log2FC2), na.rm = T),1)*1.2
+
+plotdf$order_2 <- ifelse(plotdf$comparison == "t0_vs_t1",plotdf$log2FC2,0)
+
+plotdf <- plotdf[order(plotdf$panel, plotdf$order_2, decreasing = F),]
+
+plotdf$order_3 <- 1:nrow(plotdf)
+
+
+
+## triangle
+triangle_ruraldiet_diet <- 
+  ggplot(plotdf, aes(y = reorder(protein, log2FC2), x = ""))+
+  geom_point( aes(fill = log2FC2, shape = regulation),size = 3)+
+  scale_shape_manual(values = c("up" = 24, "down" = 25))+
+  scale_fill_gradientn(colours = c("blue","white","red"), 
+                       limits = c(-max.val, max.val),
+                       guide = guide_colorbar(frame.colour = "black", 
+                                              ticks.colour = "black"))+
+  facet_grid(panel~ comparison, scales = "free_y", space = "free")+
+  #scale_y_reordered()+
+  theme_bw()+
+  theme( axis.title =  element_blank())+
+  geom_text(aes(label = adj.P.Val.signif), size = 5)+ggtitle("rural diet")
+
+triangle_ruraldiet_diet
+
+```
+
+
+
+
+
+
+
+
+
+
+
+# =============================
+
+# 3. Mbege
+
+DSM - diety study urban indindividuals : Mbege
+
+
+
+
+
+#### load data
+#### ... metadata
+```{r}
+sample_table_mbege <- read.csv("./241129_sample_table_mbege.csv", row.names = 1)
+
+head(sample_table_mbege)
+```
+
+
+#### ... olink
+```{r}
+olink_mbege <- read.csv("./241129_olink_mbege.csv", row.names = 1, check.names = FALSE)
+
+head(olink_mbege)
+```
+
+
+#### factor levels
+```{r}
+sample_table_mbege$timepoint <- factor(sample_table_mbege$timepoint, levels = c("t0","t1","t2"))
+
+unique(sample_table_mbege$timepoint)
+```
+
+```{r}
+ggplot(sample_table_mbege, aes(x= timepoint, y= PID, color = Group))+
+  geom_point()+
+  geom_line(aes(group = PID))
+```
+```{r}
+table(sample_table_mbege$Group, sample_table_mbege$timepoint)
+```
+
+
+
+```{r}
+olink_mbege <- olink_mbege[match(rownames(sample_table_mbege), rownames(olink_mbege)),]
+
+identical(rownames(olink_mbege), rownames(sample_table_mbege))
+```
+
+```{r}
+all(sapply(olink_mbege, class) == "numeric")
+```
+```{r}
+dim(olink_mbege)
+```
+
+#### ... vis miss values
+```{r}
+vis_miss(olink_mbege)
+```
+
+
+```{r}
+data_melt_mbege <- reshape2::melt(as.matrix(olink_mbege), id.var = "row.names")
+
+colnames(data_melt_mbege) <- c("SampleID","Assay","NPX")
+
+data_melt_mbege <- merge(data_melt_mbege, sample_table_mbege, all.x = T, by.x = "SampleID", by.y = "ID")
+
+
+head(data_melt_mbege)
+```
+
+
+
+
+
+
+# ------------------------------
+
+## Variance partition Mbege
+
+# ------------------------------
+
+## Variance partition: Mbege
+
+
+### step1: find metabolites contributing to more than 5% variation for each time comparison
+```{r}
+form <- ~ Age + (1 | PID) + timepoint_numeric + BMI_t0 + activity_sum_rank_scaled
+
+varpart_features_mbege <- list()
+
+for ( i in c("t0_vs_t1","t1_vs_t2","t0_vs_t2")){
+  tp1 <- str_split_fixed(i,"_vs_",2)[,1]
+  tp2 <- str_split_fixed(i,"_vs_",2)[,2]
+  
+  tmpinfo <- subset(sample_table_mbege, timepoint %in% c(tp1,tp2))
+  
+  ## make timepoint variable into numeric
+  tmpinfo$timepoint_numeric <- as.numeric(gsub("t","",tmpinfo$timepoint))
+  
+  tmpdata <- olink_mbege[match(tmpinfo$ID, rownames(olink_mbege)),]
+  tmpdata <- t(tmpdata)
+  
+  if(identical(tmpinfo$ID, colnames(tmpdata))){
+    print("identical")
+  } else{
+    stop("error, info and data samples not ordered correctly")
+  }
+  
+  
+  tmpvarpart <- fitExtractVarPartModel(tmpdata, form, tmpinfo)
+  
+  # sort variables (i.e. columns) by median fraction
+#       of variance explained
+tmpvarpart <- sortCols(tmpvarpart)
+
+varpart_features_mbege[[i]]$varpart <- tmpvarpart
+varpart_features_mbege[[i]]$info <- tmpinfo
+varpart_features_mbege[[i]]$data <- tmpdata
+
+}
+```
+
+### step2: plot results
+```{r}
+## colors 
+colors_vars <- c("Residuals" = "lightgray",
+                 "timepoint_numeric"  = "turquoise",
+                 "Age" = "purple",
+                 "BMI_t0" = "cornflowerblue",
+                 "PID" = "lightyellow",
+                 "activity_sum_rank_scaled" = "tomato3")
+```
+
+```{r}
+list_parvar_plots_mbege <- list()
+
+for (i in names(varpart_features_mbege)){
+  print(i)
+  
+tmp_df <- as.data.frame(varpart_features_mbege[[i]]$varpart)
+tmp_df$protein <- rownames(tmp_df)
+tmp_df <- reshape2::melt(tmp_df, id.vars = "protein")
+
+timepoint_var <- subset(tmp_df, variable == "timepoint_numeric")$value
+names(timepoint_var) <- as.character(subset(tmp_df, variable == "timepoint_numeric")$protein)
+
+tmp_df$timepoint <- timepoint_var[match(tmp_df$protein, names(timepoint_var))]
+tmp_df$value100 <- 100*tmp_df$value
+
+## factor
+tmp_df$variable <- factor(tmp_df$variable, levels = rev(c("timepoint_numeric","Age","BMI_t0","activity_sum_rank_scaled", "PID","Residuals")))
+
+
+tmp_df <- tmp_df[order(tmp_df$timepoint, decreasing = T),]
+
+
+# barplot
+tmpplot <- ggplot(subset(tmp_df, timepoint >0.05), aes(x = reorder(protein, timepoint), y = value100, fill = variable))+
+  geom_bar(stat = "identity", position = "stack")+
+  coord_flip()+
+  scale_fill_manual(values = colors_vars)+
+ xlab("")+
+  ylab("% Explained variance")+
+  ggtitle("t0vst1 Top contributions (>5%) - timepoint")
+
+
+list_parvar_plots_mbege[["df"]][[i]] <- tmp_df
+list_parvar_plots_mbege[["plot"]][[i]] <- tmpplot
+}
+```
+```{r fig.width=20, fig.height=10}
+wrap_plots(list_parvar_plots_mbege$plot, nrow = 1, guides = "collect")
+```
+
+### step3: extract metabolites contributing >5% for downstream analysis
+```{r}
+for (i in names(list_parvar_plots_mbege$df)){
+  print(i)
+  
+  tmp_df <- NULL
+  
+  tmp_df <- list_parvar_plots_mbege$df[[i]]
+  
+  var_metabo <- unique(tmp_df[tmp_df$timepoint>0.05,"protein"])
+
+  print(paste0(round(length(var_metabo)*100/length(unique(tmp_df$protein)),digits = 2),"% proteins taken for analysis for comparison ",i))
+  
+  
+  ## add to varpart_features_mbege
+  varpart_features_mbege[[i]]$vars <- var_metabo
+}
+```
+
+
+
+### step4: perform dream analysis
+```{r}
+list_dream_mbege <- list()
+
+for (i in names(varpart_features_mbege)){
+  print(i)
+  
+  myinfo <- varpart_features_mbege[[i]]$info
+  ## factor for the variables present
+  myinfo$timepoint <- factor(myinfo$timepoint, levels = unique(myinfo$timepoint))
+  
+  mydata <- varpart_features_mbege[[i]]$data
+  ## filter variables
+  mydata <- mydata[which(rownames(mydata) %in% as.character( varpart_features_mbege[[i]]$vars)),]
+  
+  mycontrasts <- c(
+    t0_vs_t1 = "timepointt0 - timepointt1",
+    t0_vs_t2 = "timepointt0 - timepointt2",
+    t1_vs_t2 = "timepointt1 - timepointt2"
+  )
+  
+  
+  L <- makeContrastsDream(~ 0 + timepoint + BMI_t0 + Age + activity_sum_rank_scaled + (1|PID) , myinfo,
+  contrasts = mycontrasts[names(mycontrasts) == i]
+)
+
+# Visualize contrast matrix
+plotContrasts(L)
+
+fitmm_dream <- dream(mydata, ~ 0 + timepoint + BMI_t0 + Age + activity_sum_rank_scaled + (1|PID), myinfo, L)
+
+fitmm_dream <- eBayes(fitmm_dream)
+
+dream_res <- variancePartition::topTable(fitmm_dream, coef = i, number = Inf, adjust.method = "BH", sort.by = "p", lfc = 0)
+
+dream_res$protein <- rownames(dream_res)
+
+print(nrow(dream_res[dream_res$adj.P.Val <=0.05,]))
+
+list_dream_mbege[[i]] <- dream_res
+}
+```
+```{r}
+res_dream_mbege <- do.call(rbind, Map(cbind, comparison = names(list_dream_mbege),list_dream_mbege))
+
+head(res_dream_mbege)
+```
+```{r}
+## add sig
+res_dream_mbege <- as.data.frame(res_dream_mbege %>% add_significance(p.col = "adj.P.Val"))
+```
+
+### step5: calculate paire fc
+
+```{r}
+pairedFC_mbege <- data.frame()
+
+for(i in names(varpart_features_mbege)){
+  print(i)
+  
+  ctr_condition = str_split_fixed(i, "_vs_",2)[,1]
+  test_condition = str_split_fixed(i, "_vs_",2)[,2]
+  
+  print(ctr_condition)
+  print(test_condition)
+  
+  ctrids <- rownames(subset(varpart_features_mbege[[i]]$info, 
+                            as.character(timepoint) == ctr_condition))
+  testids <- rownames(subset(varpart_features_mbege[[i]]$info, 
+                             as.character(timepoint) == test_condition))
+
+  
+  
+  tmpfc <- fcros::fcrosFCmat(varpart_features_mbege[[i]]$data, ctrids, testids, log2.opt = 0)
+
+  tmp_pairedFC <- data.frame(protein = tmpfc$idnames, 
+                                       FC = as.numeric(tmpfc$FC), 
+                                       FC2 = as.numeric(tmpfc$FC2))
+
+  tmp_pairedFC$log2FC <- log2(tmp_pairedFC$FC)
+  tmp_pairedFC$log2FC2 <- log2(tmp_pairedFC$FC2)
+
+  tmp_pairedFC$direction <- ifelse(tmp_pairedFC$log2FC2>0,"up",  "down")
+
+  tmp_pairedFC$comparison <- i
+  
+  pairedFC_mbege <- rbind(pairedFC_mbege, tmp_pairedFC)
+}
+```
+### step6: combine dream and paireFC results
+```{r}
+fc_threshold <- 1
+```
+
+```{r}
+### add paired FC
+pairedFC_mbege$merged <- paste0(pairedFC_mbege$protein,"_", pairedFC_mbege$comparison)
+
+res_dream_mbege$merged <- paste0(res_dream_mbege$protein,"_", res_dream_mbege$comparison)
+
+cols_2_add <- c("FC","FC2","log2FC","log2FC2","direction","merged")
+
+res_dream_mbege <- merge(res_dream_mbege, pairedFC_mbege[,cols_2_add], by = "merged")
+
+res_dream_mbege$regulation <- ifelse(res_dream_mbege$adj.P.Val.signif != "ns" & abs(res_dream_mbege$log2FC2) > log2(fc_threshold), res_dream_mbege$direction, "ns")
+
+rownames(res_dream_mbege) <- res_dream_mbege$merged
+
+res_dream_mbege$protein_simple <- gsub("[[:punct:]]", "", res_dream_mbege$protein)
+
+res_dream_mbege$panel <- olink_annotation[match(as.character( res_dream_mbege$protein_simple), as.character(olink_annotation$simple_protein_name)),"panel_short"]
+
+res_dream_mbege$panel <- factor(res_dream_mbege$panel, levels = c("cardiometabo", "inflammation"))
+
+head(res_dream_mbege)
+```
+
+### step7: list of sig metabolites
+```{r}
+list_sig_dream_mbege <- list()
+
+for(i in unique(res_dream_mbege$comparison)){
+  
+  print(i)
+  
+  list_sig_dream_mbege[[i]] <- split(
+    subset(res_dream_mbege, regulation != "ns" & comparison == i)$protein,
+     subset(res_dream_mbege, regulation != "ns" & comparison == i)$regulation
+    )
+  
+}
+
+str(list_sig_dream_mbege)
+```
+
+
+
+### step8 compare to previous res: SKIP
+
+
+### step9: plots
+count
+```{r}
+count_da_mbege <- as.data.frame(res_dream_mbege %>% 
+                                      group_by(comparison) %>% 
+                                      summarize(up = sum(regulation == "up"),
+                                                down = sum(regulation == "down")))
+
+
+count_da_mbege <- reshape2::melt(count_da_mbege)
+
+count_da_mbege
+```
+
+```{r}
+count_da_mbege$comparison <- factor(count_da_mbege$comparison, levels = c("t0_vs_t1","t1_vs_t2","t0_vs_t2"))
+
+ggplot(count_da_mbege, aes(x= comparison, y= value, fill = variable))+
+  geom_bar(stat = "identity",color = "black", position = "stack")+
+  scale_fill_manual(values = c("up" = "tomato3","down" = "cornflowerblue"))+
+  geom_text(vjust = 1, position = position_stack(), aes(label = value))+
+  theme_bw()+
+  ggtitle("Mbege diet")+
+  theme(aspect.ratio = 1.5)
+```
+
+### triangle - dream results
+
+
+```{r fig.height=8, fig.width=5}
+
+plotdf  <- subset(res_dream_mbege, adj.P.Val.signif != "ns")
+
+plotdf$comparison <- factor(plotdf$comparison, levels = c("t0_vs_t1","t1_vs_t2","t0_vs_t2"))
+
+max.val <- round(max(abs(plotdf$log2FC2), na.rm = T),1)*1.2
+
+plotdf$order_2 <- ifelse(plotdf$comparison == "t0_vs_t1",plotdf$log2FC2,0)
+
+plotdf <- plotdf[order(plotdf$panel, plotdf$order_2, decreasing = F),]
+
+plotdf$order_3 <- 1:nrow(plotdf)
+
+
+
+## triangle
+triangle_mbege <- 
+  ggplot(plotdf, aes(y = reorder(protein, log2FC2), x = ""))+
+  geom_point( aes(fill = log2FC2, shape = regulation),size = 3)+
+  scale_shape_manual(values = c("up" = 24, "down" = 25))+
+  scale_fill_gradientn(colours = c("blue","white","red"), 
+                       limits = c(-max.val, max.val),
+                       guide = guide_colorbar(frame.colour = "black", 
+                                              ticks.colour = "black"))+
+  facet_grid(panel~ comparison, scales = "free_y", space = "free")+
+  #scale_y_reordered()+
+  theme_bw()+
+  theme( axis.title =  element_blank())+
+  geom_text(aes(label = adj.P.Val.signif), size = 5)+
+  ggtitle("Mbege")
+
+triangle_mbege
+
+```
+
+
+
+
+
+
+# ===========================================
+
+# 4 . Plots all diets
+
+## 4.1. PCA all diets
+```{r}
+ pca.urbandiet <- plotPCAnew(pca_input = t(olink_urbandiet_diet), anno = sample_table_urbandiet_diet, ntop = "all", xPC = 1, yPC = 2, anno_colour = col_timepoint,  color = "timepoint", color.ellipse = TRUE, scale = T,  title = "Urbn diet, olink, all")
+
+pca.ruraldiet <- plotPCAnew(pca_input = t(olink_ruraldiet_diet), anno = sample_table_ruraldiet_diet, ntop = "all", xPC = 1, yPC = 2, anno_colour = col_timepoint,  color = "timepoint", color.ellipse = TRUE, scale = T,  title = "Rural diet, olink, all")
+
+pca.mbege <- plotPCAnew(pca_input = t(olink_mbege), anno = sample_table_mbege, ntop = "all", xPC = 1, yPC = 2, anno_colour = col_timepoint,  color = "timepoint", color.ellipse = TRUE, scale = T, title = "Mbege, olink, all")
+```
+```{r fig.height=5, fig.width=10}
+pca.urbandiet + pca.ruraldiet + pca.mbege + plot_layout(nrow = 1, guides = "collect")
+```
+
+
+
+#### ... batch correction 
+```{r}
+olink_urbandiet_diet_corrected <- limmaBatchEffectRemoval(t(olink_urbandiet_diet), batchfactor = "PID", batchfactor_2 = NULL, modelfactor = "timepoint", anno_table = sample_table_urbandiet_diet )
+
+pca.urbandiet_correct <- plotPCAnew(pca_input =olink_urbandiet_diet_corrected, anno = sample_table_urbandiet_diet, ntop = "all", xPC = 1, yPC = 2, anno_colour = col_timepoint,  color = "timepoint", color.ellipse = TRUE, scale = T, title = "Urbn diet, olink, all, batch corrected")
+
+pca.urbandiet_correct
+
+```
+```{r}
+olink_ruraldiet_diet_corrected <- limmaBatchEffectRemoval(t(olink_ruraldiet_diet), batchfactor = "PID", batchfactor_2 = NULL, modelfactor = "timepoint", anno_table = sample_table_ruraldiet_diet )
+
+pca.ruraldiet_correct <- plotPCAnew(pca_input =olink_ruraldiet_diet_corrected, anno = sample_table_ruraldiet_diet, ntop = "all", xPC = 1, yPC = 2, anno_colour = col_timepoint,  color = "timepoint", color.ellipse = TRUE, scale = T,  title = "Rural diet, olink, all, batch corrected")
+
+pca.ruraldiet_correct
+
+```
+```{r}
+olink_mbege_corrected <- limmaBatchEffectRemoval(t(olink_mbege), batchfactor = "PID", batchfactor_2 = NULL, modelfactor = "timepoint", anno_table = sample_table_mbege )
+
+pca.mbege_correct <- plotPCAnew(pca_input =olink_mbege_corrected, anno = sample_table_mbege, ntop = "all", xPC = 1, yPC = 2, anno_colour = col_timepoint,  color = "timepoint", color.ellipse = TRUE, scale = T,  title = "Mbege, olink, all, batch corrected")
+
+pca.mbege_correct
+
+```
+
+```{r fig.height=8, fig.width=10}
+pca.urbandiet + pca.ruraldiet + pca.mbege + pca.urbandiet_correct + pca.ruraldiet_correct + pca.mbege_correct + plot_layout(nrow=2, ncol =3 , guides = "collect")
+```
+
+
+## 4.2. dream: Mixed model
+#### all results dream diet conditions
+```{r}
+tmp1 <- res_dream_urbandiet
+tmp1$diet <- "urban_diet"
+
+tmp2 <- res_dream_ruraldiet
+tmp2$diet <- "rural_diet"
+
+tmp3 <- res_dream_mbege
+tmp3$diet <- "MBEGE"
+
+res_dream_all <- rbind(tmp1, tmp2, tmp3)
+
+head(res_dream_all)
+```
+
+#### type of protein
+```{r}
+res_dream_all_sig <- subset(res_dream_all, adj.P.Val.signif != "ns")
+```
+
+
+```{r fig.height=10, fig.width=7}
+res_dream_all_sig$uniprot <- olink_annotation[match(res_dream_all_sig$protein_simple, olink_annotation$simple_protein_name),"Uniprot.ID"]
+
+# side annoation
+side_annotation <- proteins_anno_term_wide
+side_annotation <- side_annotation[which(rownames(side_annotation) %in% res_dream_all_sig$uniprot),]
+
+
+## change row names to protein names
+rownames(side_annotation) <- olink_annotation[match(rownames(side_annotation), olink_annotation$Uniprot.ID),"simple_protein_name"]
+
+
+
+# remove terms with no proteins
+side_annotation <- side_annotation[,colSums(side_annotation)>0]
+
+# which annotation has the most terms
+order_terms <- colSums(side_annotation)
+order_terms <- order_terms[order(order_terms, decreasing = T)]
+
+# which protein has no annotation
+proteins <- rowSums(side_annotation)
+
+proteins
+# which proteins are not in the side annotation
+unique(res_dream_all_sig$protein_simple)[which(! unique(res_dream_all_sig$protein_simple) %in% rownames(side_annotation))]
+
+```
+
+
+```{r fig.width=10, fig.height=10}
+pheatmap::pheatmap(side_annotation)
+```
+```{r}
+### add the side annotation to the main tbale
+res_dream_all_sig <- merge(res_dream_all_sig, side_annotation, by.x = "protein_simple", by.y = "row.names", all.x= T, all.y = F)
+
+colnames(res_dream_all_sig)
+```
+```{r}
+vis_miss(res_dream_all_sig)
+```
+
+
+```{r}
+# which proteins don't have a term 
+res_dream_all_sig$protein_simple[which(!res_dream_all_sig$protein_simple %in% names(proteins))]
+```
+
+
+```{r}
+# replace NA with 0
+res_dream_all_sig[is.na(res_dream_all_sig)]<- 0
+
+vis_miss(res_dream_all_sig)
+```
+```{r}
+colnames(res_dream_all_sig)
+```
+```{r }
+# put terms cytokines and inflammatory response at the end
+order_terms <- order_terms[c(which(!names(order_terms) %in% c("Inflammatory response","Cytokine")), match(c("Inflammatory response","Cytokine"),names(order_terms)))]
+
+## take only terms with more than 2 proteins 
+order_terms_2 <- order_terms[order_terms>2]
+
+
+## give new numbers based on the new order
+order_terms_3 <- rev(1:length(order_terms_2))
+names(order_terms_3) <- names(order_terms_2)
+
+order_terms_3
+
+```
+
+
+```{r}
+## assign proteins to the top terms
+myproteins <- unique(res_dream_all_sig$uniprot)
+
+terms_myproteins<- unlist(sapply(myproteins,  function(x){
+  # find the terms related to this protein
+  myterm <-as.character(proteins_anno_term[proteins_anno_term$Uniprot.ID == x,"term"])
+  
+  # take the one with the highest number of proteins assigned to it
+  numb <- order_terms_3[which(names(order_terms_3) %in% myterm)]
+  names(numb[numb == max(numb, na.rm = T)])
+}))
+
+## assign terms
+res_dream_all_sig$term <- terms_myproteins[match(res_dream_all_sig$uniprot, names(terms_myproteins))]
+
+## order the table by the terms
+res_dream_all_sig$count_term <- order_terms_3[match(res_dream_all_sig$term, names(order_terms_3))]
+
+## change count_term  NA terms   be 0
+res_dream_all_sig[is.na(res_dream_all_sig$count_term),"count_term"] <- 0
+
+
+res_dream_all_sig <- res_dream_all_sig[order(res_dream_all_sig$count_term, decreasing = T),]
+
+## factor terms 
+res_dream_all_sig$term <- factor(res_dream_all_sig$term, levels = unique(res_dream_all_sig$term))
+```
+
+
+
+####... word cloud from terms
+```{r}
+allterms_urbandiet <- gsub("[[:punct:]]", "", unique(unlist(list_sig_dream_urbandiet_diet)))
+
+allterms_urbandiet <- olink_annotation[match(allterms_urbandiet, olink_annotation$simple_protein_name),"Uniprot.ID"]
+
+allterms_urbandiet <- proteins_anno_term[which(proteins_anno_term$Uniprot.ID %in% allterms_urbandiet),]
+
+# Create a corpus  
+docs <- tm::Corpus(tm::VectorSource(allterms_urbandiet$term))
+
+docs <- docs %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(stripWhitespace)
+docs <- tm_map(docs, content_transformer(tolower))
+docs <- tm_map(docs, removeWords, stopwords("english"))
+
+dtm <- TermDocumentMatrix(docs) 
+matrix <- as.matrix(dtm) 
+words <- sort(rowSums(matrix),decreasing=TRUE) 
+df <- data.frame(word = names(words),freq=words)
+
+set.seed(123) # for reproducibility 
+wordcloud(words = df$word, freq = df$freq, min.freq = 1,           max.words=200, random.order=FALSE, rot.per=0.35,            colors=brewer.pal(8, "Dark2"))
+```
+#### ... barplots
+```{r}
+colors_terms <- color_clusters[1:length(unique(res_dream_all_sig$term))]
+names(colors_terms) <- unique(res_dream_all_sig$term)
+```
+
+
+```{r}
+tmp <- res_dream_all_sig
+
+
+tmp <- reshape2::melt(tmp[,c("protein","diet","comparison",colnames(side_annotation)[which(colnames(side_annotation) %in% colnames(tmp))])], id.vars = c("protein","diet","comparison"))
+
+## remove rows with values 0 indicating this is not the annotation for this protein
+tmp <- subset(tmp, value != 0)
+
+tmp <- as.data.frame(tmp %>% group_by(diet,comparison, variable) %>% summarize(count_term = n()))
+
+colors_terms <- color_clusters[1:length(unique(subset(tmp, count_term >2)$variable))]
+names(colors_terms) <- unique(subset(tmp, count_term >2)$variable)
+
+tmp$comparison <- factor(tmp$comparison, levels = c("t0_vs_t1","t1_vs_t2","t0_vs_t2"))
+
+ggplot(subset(tmp, count_term > 2), aes(y= reorder(variable, count_term), x= comparison, fill = variable, size = count_term))+
+  geom_point(shape = 21)+
+  facet_grid(.~ diet)+
+  theme_bw()+
+  scale_fill_manual(values = colors_terms, na.value = "white", guide = "none")+
+  theme(legend.position = "bottom")+
+  ylab("")+border()
+
+```
+
+
+
+
+## 4.3. Line plots 
+#### Sup figure plots
+#### ... urban diet
+```{r}
+diet <- "urban_diet"
+
+main_fig_prot <- c("CNDP1","THBS4","ANGPTL3","TWEAK","TRAIL","SOD1")
+
+plot_prot <- unique(unlist(list_sig_dream_urbandiet_diet))
+
+plot_prot <- plot_prot[which(!plot_prot %in% main_fig_prot)]
+
+plot_prot
+```
+```{r}
+data_melt_urbandiet$PID <- str_split_fixed(data_melt_urbandiet$SampleID,"_",2)[,1]
+```
+
+```{r warning=FALSE, fig.height=10, fig.width=12}
+line.sig.urbandiet_dream <- 
+  ggplot(subset(data_melt_urbandiet, Assay  %in% plot_prot & diet == "urban_diet"), 
+       aes(x= timepoint, y= NPX))+
+  geom_boxplot( width = 0.2, aes(fill = timepoint), outlier.shape = NA)+
+  geom_line(aes(group = PID), alpha = 0.5)+
+  geom_smooth(aes(x= as.numeric(timepoint), y= NPX), color = col_diet_diet[["urban_diet"]])+
+  facet_wrap(.~ Assay, scales = "free")+
+  theme_bw()+
+  theme(aspect.ratio = 0.8)+scale_fill_manual(values = col_timepoint)
+  
+
+line.sig.urbandiet_dream
+```
+#### ... rural diet
+```{r}
+diet <- "rural_diet"
+
+main_fig_prot <- c("CXCL1","CXCL5","CCL5","CXCL6","IL8","4E-BP1")
+
+plot_prot <- unique(unlist(list_sig_dream_ruraldiet_diet))
+
+plot_prot <- plot_prot[which(!plot_prot %in% main_fig_prot)]
+
+plot_prot
+```
+
+```{r warning=FALSE, fig.height=10, fig.width=12}
+line.sig.ruraldiet_dream <- 
+  ggplot(subset(data_melt_ruraldiet, Assay  %in% plot_prot & diet == "rural_diet"), 
+       aes(x= timepoint, y= NPX))+
+  geom_boxplot( width = 0.2, aes(fill = timepoint), outlier.shape = NA)+
+  geom_line(aes(group = PID), alpha = 0.5)+
+  geom_smooth(aes(x= as.numeric(timepoint), y= NPX), color = col_diet_diet[["rural_diet"]])+
+  facet_wrap(.~ Assay, scales = "free")+
+  theme_bw()+
+  theme(aspect.ratio = 0.8)+scale_fill_manual(values = col_timepoint)
+  
+
+line.sig.ruraldiet_dream
+```
+
+#### ... Mbege diet
+```{r}
+diet <- "MBEGE"
+
+main_fig_prot <- c("CES1","REG1A","TGFBR3","IL8","CXCL6","MMP-1")
+
+plot_prot <- unique(unlist(list_sig_dream_mbege))
+
+plot_prot <- plot_prot[which(!plot_prot %in% main_fig_prot)]
+
+plot_prot
+```
+
+```{r warning=FALSE, fig.height=10, fig.width=12}
+line.sig.mbege_dream <- 
+  ggplot(subset(data_melt_mbege, Assay  %in% plot_prot & diet == "MBEGE"), 
+       aes(x= timepoint, y= NPX))+
+  geom_boxplot( width = 0.2, aes(fill = timepoint), outlier.shape = NA)+
+  geom_line(aes(group = PID), alpha = 0.5)+
+  geom_smooth(aes(x= as.numeric(timepoint), y= NPX), color = col_diet_diet[["MBEGE"]])+
+  facet_wrap(.~ Assay, scales = "free")+
+  theme_bw()+
+  theme(aspect.ratio = 0.8)+scale_fill_manual(values = col_timepoint)
+  
+
+line.sig.mbege_dream
+```
+
+## 4.4. Triangle plots with dendograms
+### 4.4.1. Urban diet
+
+```{r}
+sig_proteins_urban_diet <- subset(res_dream_all_sig, diet == "urban_diet")
+sig_proteins_urban_diet <- sig_proteins_urban_diet[!duplicated(sig_proteins_urban_diet$protein_simple),]
+
+rownames(sig_proteins_urban_diet) <- sig_proteins_urban_diet$protein_simple
+
+## split to panels 
+list_sig_proteins_urban_diet <- list(cardiometabo = subset(sig_proteins_urban_diet, panel == "cardiometabo"), inflammation = subset(sig_proteins_urban_diet, panel == "inflammation"))
+
+list_sig_proteins_urban_diet <- lapply(list_sig_proteins_urban_diet, function(x){ x[,c( 22:91)]})
+
+```
+
+```{r}
+##replace NA with zero
+list_sig_proteins_urban_diet <- lapply(list_sig_proteins_urban_diet, 
+                                       function(x) {
+                                         x[is.na(x)] <- 0
+                                         x[,colSums(x) != 0]
+                                       })
+
+
+lapply(list_sig_proteins_urban_diet, dim)
+```
+
+```{r}
+# Compute distances and hierarchical clustering
+dd_urbandiet <- lapply(list_sig_proteins_urban_diet, function(x){
+  dist(x, method = "euclidean")
+} )
+
+hc_urbandiet <- lapply(dd_urbandiet, function(x){
+  hclust(x, method = "complete")
+}) 
+
+lapply(hc_urbandiet, plot)
+```
+
+```{r}
+palettes <- ggthemes_data[["tableau"]]
+
+mycolors <- palettes$`color-palettes`$regular$`Tableau 20`
+## remove gray
+mycolors  <- mycolors[!grepl("Gray", mycolors$name),]
+
+mycolors
+```
+
+```{r fig.height=8}
+myorder_urbandiet <- unlist(lapply(hc_urbandiet, function(x) {x$labels[x$order]}))
+
+melt_urbndiet_hc <- as.data.frame(sig_proteins_urban_diet[,c(22:91)])
+melt_urbndiet_hc$protein <- rownames(melt_urbndiet_hc)
+melt_urbndiet_hc <- reshape2::melt(melt_urbndiet_hc, id.vars = "protein")
+melt_urbndiet_hc$protein <- factor(melt_urbndiet_hc$protein, levels = myorder_urbandiet)
+melt_urbndiet_hc <- melt_urbndiet_hc[order(melt_urbndiet_hc$protein, decreasing = T),]
+
+melt_urbndiet_hc$present <- ifelse(melt_urbndiet_hc$value == 1, "yes", NA)
+
+vars <- as.data.frame(subset(melt_urbndiet_hc, value == 1) %>% group_by(variable) %>% count())
+vars$name <- ifelse(vars$n >3, as.character(vars$variable), "other")
+
+melt_urbndiet_hc$term_name <- vars[match(melt_urbndiet_hc$variable, vars$variable), "name"]
+
+col_terms_new <- mycolors$value[1:(length(unique(melt_urbndiet_hc$term_name))-1)]
+
+names(col_terms_new) <- unique(melt_urbndiet_hc$term_name)[which(unique(melt_urbndiet_hc$term_name)!="other")]
+
+col_terms_new <- c(col_terms_new, "other" = NA)
+
+melt_urbndiet_hc$term_name <- factor(melt_urbndiet_hc$term_name, levels = c(unique(melt_urbndiet_hc$term_name)[which(unique(melt_urbndiet_hc$term_name)!="other")], "other"))
+
+melt_urbndiet_hc$plotfill <- ifelse(melt_urbndiet_hc$value>0, as.character( melt_urbndiet_hc$term_name), NA)
+
+melt_urbndiet_hc$plotfill <- factor(melt_urbndiet_hc$plotfill, levels = rev(c(unique(melt_urbndiet_hc$plotfill)[which(unique(melt_urbndiet_hc$plotfill)!="other")], "other")))
+
+melt_urbndiet_hc <- as.data.frame(melt_urbndiet_hc %>% group_by(plotfill) %>% mutate(termsum = n()))
+melt_urbndiet_hc$termsum <- ifelse(is.na(melt_urbndiet_hc$plotfill), 0, melt_urbndiet_hc$termsum)
+melt_urbndiet_hc$termsum <- ifelse(melt_urbndiet_hc$plotfill== "other", 1, melt_urbndiet_hc$termsum)
+
+
+melt_urbndiet_hc <- melt_urbndiet_hc[order(melt_urbndiet_hc$termsum, decreasing = F),]
+
+melt_urbndiet_hc$term_name <- factor(melt_urbndiet_hc$term_name, levels = rev(unique(melt_urbndiet_hc$term_name)))
+
+melt_urbndiet_hc$plotfill <- factor(melt_urbndiet_hc$plotfill, levels = rev(unique(melt_urbndiet_hc$plotfill)))
+
+melt_urbndiet_hc$panel <- olink_annotation[match(melt_urbndiet_hc$protein, olink_annotation$simple_protein_name),"panel_short"]
+
+melt_urbndiet_hc$panel <- factor(melt_urbndiet_hc$panel, levels = unique(melt_urbndiet_hc$panel))
+
+terms_urbandiet <- unique(melt_urbndiet_hc$plotfill)
+
+p2 <- ggplot(melt_urbndiet_hc, aes(y= protein, fill = plotfill, color= plotfill, x= term_name))+
+  geom_tile()+
+  theme_classic()+
+  scale_color_manual(values = col_terms_new, na.value = "white")+
+  theme( axis.text.x = element_blank(), axis.title = element_blank(), axis.ticks.x = element_blank())+
+  facet_grid(panel~., space = "free", scales = "free")+
+  scale_fill_manual(values = col_terms_new, na.value = "white")
+
+p2
+```
+
+
+
+
+
+
+
+### 4.4.2. Rural diet
+
+```{r}
+sig_proteins_rural_diet <- subset(res_dream_all_sig, diet == "rural_diet")
+sig_proteins_rural_diet <- sig_proteins_rural_diet[!duplicated(sig_proteins_rural_diet$protein_simple),]
+
+rownames(sig_proteins_rural_diet) <- sig_proteins_rural_diet$protein_simple
+
+## split to panels 
+list_sig_proteins_rural_diet <- list(cardiometabo = subset(sig_proteins_rural_diet, panel == "cardiometabo"), inflammation = subset(sig_proteins_rural_diet, panel == "inflammation"))
+
+list_sig_proteins_rural_diet <- lapply(list_sig_proteins_rural_diet, function(x){ x[,c( 22:91)]})
+
+```
+
+```{r}
+##replace NA with zero
+list_sig_proteins_rural_diet <- lapply(list_sig_proteins_rural_diet, 
+                                       function(x) {
+                                         x[is.na(x)] <- 0
+                                         x[,colSums(x) != 0]
+                                       })
+
+
+lapply(list_sig_proteins_rural_diet, dim)
+```
+
+```{r}
+# Compute distances and hierarchical clustering
+dd_ruraldiet <- lapply(list_sig_proteins_rural_diet, function(x){
+  dist(x, method = "euclidean")
+} )
+
+hc_ruraldiet <- lapply(dd_ruraldiet, function(x){
+  hclust(x, method = "complete")
+}) 
+
+lapply(hc_ruraldiet, plot)
+```
+
+```{r}
+palettes <- ggthemes_data[["tableau"]]
+
+mycolors <- palettes$`color-palettes`$regular$`Tableau 20`
+## remove gray
+mycolors  <- mycolors[!grepl("Gray", mycolors$name),]
+
+mycolors
+```
+
+```{r fig.height=8}
+myorder_ruraldiet <- unlist(lapply(hc_ruraldiet, function(x) {x$labels[x$order]}))
+
+melt_ruraldiet_hc <- as.data.frame(sig_proteins_rural_diet[,c(22:91)])
+melt_ruraldiet_hc$protein <- rownames(melt_ruraldiet_hc)
+melt_ruraldiet_hc <- reshape2::melt(melt_ruraldiet_hc, id.vars = "protein")
+melt_ruraldiet_hc$protein <- factor(melt_ruraldiet_hc$protein, levels = myorder_ruraldiet)
+melt_ruraldiet_hc <- melt_ruraldiet_hc[order(melt_ruraldiet_hc$protein, decreasing = T),]
+
+melt_ruraldiet_hc$present <- ifelse(melt_ruraldiet_hc$value == 1, "yes", NA)
+
+vars <- as.data.frame(subset(melt_ruraldiet_hc, value == 1) %>% group_by(variable) %>% count())
+vars$name <- ifelse(vars$n >3, as.character(vars$variable), "other")
+
+melt_ruraldiet_hc$term_name <- vars[match(melt_ruraldiet_hc$variable, vars$variable), "name"]
+
+col_terms_new <- mycolors$value[1:(length(unique(melt_ruraldiet_hc$term_name))-1)]
+
+names(col_terms_new) <- unique(melt_ruraldiet_hc$term_name)[which(unique(melt_ruraldiet_hc$term_name)!="other")]
+
+col_terms_new <- c(col_terms_new, "other" = NA)
+
+melt_ruraldiet_hc$term_name <- factor(melt_ruraldiet_hc$term_name, levels = c(unique(melt_ruraldiet_hc$term_name)[which(unique(melt_ruraldiet_hc$term_name)!="other")], "other"))
+
+melt_ruraldiet_hc$plotfill <- ifelse(melt_ruraldiet_hc$value>0, as.character( melt_ruraldiet_hc$term_name), NA)
+
+melt_ruraldiet_hc$plotfill <- factor(melt_ruraldiet_hc$plotfill, levels = rev(c(unique(melt_ruraldiet_hc$plotfill)[which(unique(melt_ruraldiet_hc$plotfill)!="other")], "other")))
+
+melt_ruraldiet_hc <- as.data.frame(melt_ruraldiet_hc %>% group_by(plotfill) %>% mutate(termsum = n()))
+melt_ruraldiet_hc$termsum <- ifelse(is.na(melt_ruraldiet_hc$plotfill), 0, melt_ruraldiet_hc$termsum)
+melt_ruraldiet_hc$termsum <- ifelse(melt_ruraldiet_hc$plotfill== "other", 1, melt_ruraldiet_hc$termsum)
+
+
+melt_ruraldiet_hc <- melt_ruraldiet_hc[order(melt_ruraldiet_hc$termsum, decreasing = F),]
+
+melt_ruraldiet_hc$term_name <- factor(melt_ruraldiet_hc$term_name, levels = rev(unique(melt_ruraldiet_hc$term_name)))
+
+melt_ruraldiet_hc$plotfill <- factor(melt_ruraldiet_hc$plotfill, levels = rev(unique(melt_ruraldiet_hc$plotfill)))
+
+melt_ruraldiet_hc$panel <- olink_annotation[match(melt_ruraldiet_hc$protein, olink_annotation$simple_protein_name),"panel_short"]
+
+melt_ruraldiet_hc$panel <- factor(melt_ruraldiet_hc$panel, levels = unique(melt_ruraldiet_hc$panel))
+
+terms_ruraldiet <- unique(melt_ruraldiet_hc$plotfill)
+
+p2 <- ggplot(melt_ruraldiet_hc, aes(y= protein, fill = plotfill, color= plotfill, x= term_name))+
+  geom_tile()+
+  theme_classic()+
+  scale_color_manual(values = col_terms_new, na.value = "white")+
+  theme( axis.text.x = element_blank(), axis.title = element_blank(), axis.ticks.x = element_blank())+
+  facet_grid(panel~., space = "free", scales = "free")+
+  scale_fill_manual(values = col_terms_new, na.value = "white")
+
+p2
+```
+
+
+
+
+
+
+
+
+
+### 4.4.3. Mbege
+
+```{r}
+sig_proteins_mbege_diet <- subset(res_dream_all_sig, diet == "MBEGE")
+sig_proteins_mbege_diet <- sig_proteins_mbege_diet[!duplicated(sig_proteins_mbege_diet$protein_simple),]
+
+rownames(sig_proteins_mbege_diet) <- sig_proteins_mbege_diet$protein_simple
+
+## split to panels 
+list_sig_proteins_mbege_diet <- list(cardiometabo = subset(sig_proteins_mbege_diet, panel == "cardiometabo"), inflammation = subset(sig_proteins_mbege_diet, panel == "inflammation"))
+
+list_sig_proteins_mbege_diet <- lapply(list_sig_proteins_mbege_diet, function(x){ x[,c( 22:91)]})
+
+```
+
+```{r}
+##replace NA with zero
+list_sig_proteins_mbege_diet <- lapply(list_sig_proteins_mbege_diet, 
+                                       function(x) {
+                                         x[is.na(x)] <- 0
+                                         x[,colSums(x) != 0]
+                                       })
+
+
+lapply(list_sig_proteins_mbege_diet, dim)
+```
+
+```{r}
+# Compute distances and hierarchical clustering
+dd_mbegediet <- lapply(list_sig_proteins_mbege_diet, function(x){
+  dist(x, method = "euclidean")
+} )
+
+hc_mbegediet <- lapply(dd_mbegediet, function(x){
+  hclust(x, method = "complete")
+}) 
+
+lapply(hc_mbegediet, plot)
+```
+
+```{r}
+palettes <- ggthemes_data[["tableau"]]
+
+mycolors <- palettes$`color-palettes`$regular$`Tableau 20`
+## remove gray
+mycolors  <- mycolors[!grepl("Gray", mycolors$name),]
+
+mycolors
+```
+
+```{r fig.height=8}
+# get order based on the dendodram
+myorder_mbegediet <- unlist(lapply(hc_mbegediet, function(x) {x$labels[x$order]}))
+
+# organize the table based on the dendodram order
+melt_mbegediet_hc <- as.data.frame(sig_proteins_mbege_diet[,c(22:91)])
+melt_mbegediet_hc$protein <- rownames(melt_mbegediet_hc)
+melt_mbegediet_hc <- reshape2::melt(melt_mbegediet_hc, id.vars = "protein")
+melt_mbegediet_hc$protein <- factor(melt_mbegediet_hc$protein, levels = myorder_mbegediet)
+melt_mbegediet_hc <- melt_mbegediet_hc[order(melt_mbegediet_hc$protein, decreasing = T),]
+
+# indicate if the term is present or not
+melt_mbegediet_hc$present <- ifelse(melt_mbegediet_hc$value == 1, "yes", NA)
+
+# count the terms
+vars <- as.data.frame(subset(melt_mbegediet_hc, value == 1) %>% group_by(variable) %>% count())
+# only keep terms with more than 3 proteins
+vars$name <- ifelse(vars$n >3, as.character(vars$variable), "other")
+
+melt_mbegediet_hc$term_name <- vars[match(melt_mbegediet_hc$variable, vars$variable), "name"]
+
+col_terms_new <- mycolors$value[1:(length(unique(melt_mbegediet_hc$term_name))-1)]
+
+names(col_terms_new) <- unique(melt_mbegediet_hc$term_name)[which(unique(melt_mbegediet_hc$term_name)!="other")]
+
+col_terms_new <- c(col_terms_new, "other" = NA)
+
+melt_mbegediet_hc$term_name <- factor(melt_mbegediet_hc$term_name, levels = c(unique(melt_mbegediet_hc$term_name)[which(unique(melt_mbegediet_hc$term_name)!="other")], "other"))
+
+melt_mbegediet_hc$plotfill <- ifelse(melt_mbegediet_hc$value>0, as.character( melt_mbegediet_hc$term_name), NA)
+
+melt_mbegediet_hc$plotfill <- factor(melt_mbegediet_hc$plotfill, levels = rev(c(unique(melt_mbegediet_hc$plotfill)[which(unique(melt_mbegediet_hc$plotfill)!="other")], "other")))
+
+melt_mbegediet_hc <- as.data.frame(melt_mbegediet_hc %>% group_by(plotfill) %>% mutate(termsum = n()))
+melt_mbegediet_hc$termsum <- ifelse(is.na(melt_mbegediet_hc$plotfill), 0, melt_mbegediet_hc$termsum)
+melt_mbegediet_hc$termsum <- ifelse(melt_mbegediet_hc$plotfill== "other", 1, melt_mbegediet_hc$termsum)
+
+
+melt_mbegediet_hc <- melt_mbegediet_hc[order(melt_mbegediet_hc$termsum, decreasing = F),]
+
+melt_mbegediet_hc$term_name <- factor(melt_mbegediet_hc$term_name, levels = rev(unique(melt_mbegediet_hc$term_name)))
+
+melt_mbegediet_hc$plotfill <- factor(melt_mbegediet_hc$plotfill, levels = rev(unique(melt_mbegediet_hc$plotfill)))
+
+melt_mbegediet_hc$panel <- olink_annotation[match(melt_mbegediet_hc$protein, olink_annotation$simple_protein_name),"panel_short"]
+
+melt_mbegediet_hc$panel <- factor(melt_mbegediet_hc$panel, levels = unique(melt_mbegediet_hc$panel))
+
+terms_mbegediet <- unique(melt_mbegediet_hc$plotfill)
+
+p2 <- ggplot(melt_mbegediet_hc, aes(y= protein, fill = plotfill, color= plotfill, x= term_name))+
+  geom_tile()+
+  theme_classic()+
+  scale_color_manual(values = col_terms_new, na.value = "white")+
+  theme( axis.text.x = element_blank(), axis.title = element_blank(), axis.ticks.x = element_blank())+
+  facet_grid(panel~., space = "free", scales = "free")+
+  scale_fill_manual(values = col_terms_new, na.value = "white")
+
+p2
+```
+
+
+
+
+
+
+
+
+
+
+
+
+### 4.4.4. PLOT ALL
+```{r}
+all_terms <- unique(c(terms_urbandiet, terms_ruraldiet, terms_mbegediet))
+
+all_terms
+```
+```{r}
+kelly <- distinct_palette(pal = "kelly")
+col_terms <- kelly[1:(length(all_terms)-2)]
+
+names(col_terms) <- unique(all_terms)[which(unique(all_terms)!="other")]
+
+col_terms <- c(col_terms, "other" = NA)
+
+col_terms
+```
+
+#### ... Urban diet
+```{r fig.height=8}
+plotdf  <- subset(res_dream_urbandiet, adj.P.Val.signif != "ns")
+
+plotdf$comparison <- factor(plotdf$comparison, levels = c("t0_vs_t1","t1_vs_t2","t0_vs_t2"))
+
+max.val <- round(max(abs(plotdf$log2FC2), na.rm = T),1)*1.2
+
+## order based on dendogram
+
+plotdf$protein_simple <- factor(plotdf$protein_simple, levels = myorder_urbandiet)
+
+plotdf <- plotdf[order(plotdf$protein_simple, decreasing = F),]
+
+plotdf$panel <- factor(plotdf$panel, levels = unique(melt_urbndiet_hc$panel))
+## triangle
+triangle_urbandiet_diet <- 
+  ggplot(plotdf, aes(y = protein_simple, x = ""))+
+  geom_point( aes(fill = log2FC2, shape = regulation),size = 3)+
+  scale_shape_manual(values = c("up" = 24, "down" = 25))+
+  scale_fill_gradientn(colours = c("blue","white","red"), 
+                       limits = c(-max.val, max.val),
+                       guide = guide_colorbar(frame.colour = "black", 
+                                              ticks.colour = "black"))+
+  #scale_y_reordered()+
+  theme_bw()+
+  theme( axis.title =  element_blank())+
+  geom_text(aes(label = adj.P.Val.signif), size = 5)+
+  facet_grid(panel ~comparison , scales = "free", space = "free")
+
+
+# anno_plot_urbandiet <- ggplot(melt_urbndiet_hc, aes(y= protein, fill = plotfill, color= plotfill, x= term_name))+
+#   geom_tile()+
+#   theme_void()+
+#   scale_color_manual(values = col_terms_new, na.value = "white")+
+#   theme(axis.text.x = element_blank(), axis.title = element_blank(), axis.ticks.x = element_blank())+
+#   scale_fill_manual(values = col_terms_new, na.value = "white")
+
+anno_plot_urbandiet2 <- ggplot(melt_urbndiet_hc, aes(y= protein, fill = plotfill))+
+  geom_bar(stat = "count")+
+  theme_void()+
+  theme(strip.text =  element_blank())+
+  scale_fill_manual(values = col_terms, na.value = NA)+
+  facet_grid(panel ~. , scales = "free", space = "free")
+
+anno_plot_urbandiet2  + triangle_urbandiet_diet + plot_layout(nrow = 1, guides = "collect", widths = c(1,1))
+```
+
+
+#### ... Rural diet
+```{r fig.height=8}
+plotdf  <- subset(res_dream_ruraldiet, adj.P.Val.signif != "ns")
+
+plotdf$comparison <- factor(plotdf$comparison, levels = c("t0_vs_t1","t1_vs_t2","t0_vs_t2"))
+
+max.val <- round(max(abs(plotdf$log2FC2), na.rm = T),1)*1.2
+
+## order based on dendogram
+
+plotdf$protein_simple <- factor(plotdf$protein_simple, levels = myorder_ruraldiet)
+
+plotdf <- plotdf[order(plotdf$protein_simple, decreasing = F),]
+
+plotdf$panel <- factor(plotdf$panel, levels = unique(melt_ruraldiet_hc$panel))
+## triangle
+triangle_ruraldiet_diet <- 
+  ggplot(plotdf, aes(y = protein_simple, x = ""))+
+  geom_point( aes(fill = log2FC2, shape = regulation),size = 3)+
+  scale_shape_manual(values = c("up" = 24, "down" = 25))+
+  scale_fill_gradientn(colours = c("blue","white","red"), 
+                       limits = c(-max.val, max.val),
+                       guide = guide_colorbar(frame.colour = "black", 
+                                              ticks.colour = "black"))+
+  facet_grid(panel~ comparison, scales = "free_y", space = "free")+
+  #scale_y_reordered()+
+  theme_bw()+
+  theme( axis.title =  element_blank())+
+  geom_text(aes(label = adj.P.Val.signif), size = 5)
+
+
+anno_plot_ruraldiet2 <- ggplot(melt_ruraldiet_hc, aes(y= protein, fill = plotfill))+
+  geom_bar(stat = "count")+
+  theme_void()+
+  scale_fill_manual(values = col_terms, na.value = NA)+
+  facet_grid(panel ~. , scales = "free", space = "free")+
+  theme(strip.text = element_blank())
+
+anno_plot_ruraldiet2  + triangle_ruraldiet_diet + plot_layout(nrow = 1, guides = "collect", widths = c(1,1))
+```
+
+
+#### ... Mbege
+```{r fig.height=8}
+plotdf  <- subset(res_dream_mbege, adj.P.Val.signif != "ns")
+
+plotdf$comparison <- factor(plotdf$comparison, levels = c("t0_vs_t1","t1_vs_t2","t0_vs_t2"))
+
+max.val <- round(max(abs(plotdf$log2FC2), na.rm = T),1)*1.2
+
+## order based on dendogram
+
+plotdf$protein_simple <- factor(plotdf$protein_simple, levels = myorder_mbegediet)
+
+plotdf <- plotdf[order(plotdf$protein_simple, decreasing = F),]
+
+plotdf$panel <- factor(plotdf$panel, levels = unique(melt_mbegediet_hc$panel))
+## triangle
+triangle_mbege_diet <- 
+  ggplot(plotdf, aes(y = protein_simple, x = ""))+
+  geom_point( aes(fill = log2FC2, shape = regulation),size = 3)+
+  scale_shape_manual(values = c("up" = 24, "down" = 25))+
+  scale_fill_gradientn(colours = c("blue","white","red"), 
+                       limits = c(-max.val, max.val),
+                       guide = guide_colorbar(frame.colour = "black", 
+                                              ticks.colour = "black"))+
+  facet_grid(panel~ comparison, scales = "free_y", space = "free")+
+  #scale_y_reordered()+
+  theme_bw()+
+  theme( axis.title =  element_blank())+
+  geom_text(aes(label = adj.P.Val.signif), size = 5)
+
+melt_mbegediet_hc$panel <- factor(melt_mbegediet_hc$panel, levels = rev(c("cardiometabo","inflammation")))
+
+anno_plot_mbege2 <- ggplot(melt_mbegediet_hc, aes(y= protein, fill = plotfill))+
+  geom_bar(stat = "count")+
+  theme_void()+
+  theme(strip.text = element_blank())+
+  scale_fill_manual(values = col_terms, na.value = NA)+
+  facet_grid(panel ~. , scales = "free", space = "free")
+
+anno_plot_mbege2  + triangle_mbege_diet + plot_layout(nrow = 1, guides = "collect", widths = c(1,1))
+```
+
+
+```{r}
+anno_plot_urbandiet2  + triangle_urbandiet_diet + anno_plot_ruraldiet2  + triangle_ruraldiet_diet + anno_plot_mbege2  + triangle_mbege_diet + plot_layout(nrow = 1, guides = "collect", widths = c(1,3,1,3,1,3))
+```
+
+# ===================================
+## CONTROLS 
+
+# 5. Controls
+## 5.1. CTR (controls_u: control for rural diet ==controls_u)
+
+DSR - diety study rurla indindividuals
+
+
+### Import data
+### .. metadata data
+```{r}
+sample_table_ruraldiet_ctr <- read.csv("./241129_sample_table_ruraldiet_ctr.csv", row.names = 1)
+
+head(sample_table_ruraldiet_ctr)
+```
+```{r}
+## factor
+sample_table_ruraldiet_ctr$timepoint <- factor(sample_table_ruraldiet_ctr$timepoint, levels = c("t0","t1","t2"))
+```
+
+```{r}
+table(sample_table_ruraldiet_ctr$timepoint)
+```
+
+
+### .. Olink data
+```{r}
+olink_ruraldiet_ctr <- read.csv("./241129_olink_ruraldiet_ctr.csv", row.names = 1)
+
+
+head(olink_ruraldiet_ctr)
+```
+
+
+
+```{r}
+olink_ruraldiet_ctr <- olink_ruraldiet_ctr[match(rownames(sample_table_ruraldiet_ctr), rownames(olink_ruraldiet_ctr)),]
+
+identical(rownames(olink_ruraldiet_ctr), rownames(sample_table_ruraldiet_ctr))
+```
+
+
+
+```{r}
+data_melt_ruraldiet_ctr <- reshape2::melt(as.matrix(olink_ruraldiet_ctr), id.var = "row.names")
+
+colnames(data_melt_ruraldiet_ctr) <- c("SampleID","Assay","NPX")
+
+data_melt_ruraldiet_ctr <- merge(data_melt_ruraldiet_ctr, sample_table_ruraldiet_ctr, all.x = T, by.x = "SampleID", by.y = "ID")
+
+
+head(data_melt_ruraldiet_ctr)
+```
+
+
+
+
+
+```{r}
+
+## add annotations for olink data
+
+data_melt_ruraldiet_ctr <- merge(data_melt_ruraldiet_ctr, olink_annotation, by = "Assay", all.x = T)
+
+colnames(data_melt_ruraldiet_ctr)[colnames(data_melt_ruraldiet_ctr) == "Uniprot.ID"] <- "UniProt"
+
+
+## add unique ID
+data_melt_ruraldiet_ctr$Index <- paste0(data_melt_ruraldiet_ctr$SampleID,"_", data_melt_ruraldiet_ctr$Assay)
+
+head(data_melt_ruraldiet_ctr)
+
+```
+
+
+### Dream and varpart:
+
+### step1: find metabolites contributing to more than 5% variation for each time comparison
+
+
+
+```{r}
+form <- ~ Age + (1 | PID) + timepoint_numeric + BMI_t0 + activity_sum_rank_scaled
+
+varpart_features_ruraldiet_ctr <- list()
+
+for ( i in c("t0_vs_t1","t1_vs_t2","t0_vs_t2")){
+  tp1 <- str_split_fixed(i,"_vs_",2)[,1]
+  tp2 <- str_split_fixed(i,"_vs_",2)[,2]
+
+  tmpinfo <- subset(sample_table_ruraldiet_ctr, timepoint %in% c(tp1,tp2))
+
+  ## make timepoint variable into numeric
+  tmpinfo$timepoint_numeric <- as.numeric(gsub("t","",tmpinfo$timepoint))
+
+  tmpdata <- olink_ruraldiet_ctr[match(tmpinfo$ID, rownames(olink_ruraldiet_ctr)),]
+  tmpdata <- t(tmpdata)
+
+  if(identical(tmpinfo$ID, colnames(tmpdata))){
+    print("identical")
+  } else{
+    stop("error, info and data samples not ordered correctly")
+  }
+
+
+  tmpvarpart <- fitExtractVarPartModel(tmpdata, form, tmpinfo)
+
+  # sort variables (i.e. columns) by median fraction
+#       of variance explained
+tmpvarpart <- sortCols(tmpvarpart)
+
+varpart_features_ruraldiet_ctr[[i]]$varpart <- tmpvarpart
+varpart_features_ruraldiet_ctr[[i]]$info <- tmpinfo
+varpart_features_ruraldiet_ctr[[i]]$data <- tmpdata
+
+}
+```
+
+### step2: plot results
+```{r}
+## colors
+colors_vars <- c("Residuals" = "lightgray",
+                 "timepoint_numeric"  = "turquoise",
+                 "Age" = "purple",
+                 "BMI_t0" = "cornflowerblue",
+                 "PID" = "lightyellow",
+                 "activity_sum_rank_scaled" = "tomato3")
+```
+
+```{r}
+list_parvar_plots_ruraldiet_ctr <- list()
+
+for (i in names(varpart_features_ruraldiet_ctr)){
+  print(i)
+
+tmp_df <- as.data.frame(varpart_features_ruraldiet_ctr[[i]]$varpart)
+tmp_df$protein <- rownames(tmp_df)
+tmp_df <- reshape2::melt(tmp_df, id.vars = "protein")
+
+timepoint_var <- subset(tmp_df, variable == "timepoint_numeric")$value
+names(timepoint_var) <- as.character(subset(tmp_df, variable == "timepoint_numeric")$protein)
+
+tmp_df$timepoint <- timepoint_var[match(tmp_df$protein, names(timepoint_var))]
+tmp_df$value100 <- 100*tmp_df$value
+
+## factor
+tmp_df$variable <- factor(tmp_df$variable, levels = rev(c("timepoint_numeric","Age","BMI_t0","activity_sum_rank_scaled", "PID","Residuals")))
+
+
+tmp_df <- tmp_df[order(tmp_df$timepoint, decreasing = T),]
+
+
+# barplot
+tmpplot <- ggplot(subset(tmp_df, timepoint >0.05), aes(x = reorder(protein, timepoint), y = value100, fill = variable))+
+  geom_bar(stat = "identity", position = "stack")+
+  coord_flip()+
+  scale_fill_manual(values = colors_vars)+
+ xlab("")+
+  ylab("% Explained variance")+
+  ggtitle("t0vst1 Top contributions (>5%) - timepoint")
+
+
+list_parvar_plots_ruraldiet_ctr[["df"]][[i]] <- tmp_df
+list_parvar_plots_ruraldiet_ctr[["plot"]][[i]] <- tmpplot
+}
+```
+```{r fig.width=20, fig.height=10}
+wrap_plots(list_parvar_plots_ruraldiet_ctr$plot, nrow = 1, guides = "collect")
+```
+
+### step3: extract proteins contributing >5% for downstream analysis
+```{r}
+for (i in names(list_parvar_plots_ruraldiet_ctr$df)){
+  print(i)
+
+  tmp_df <- NULL
+
+  tmp_df <- list_parvar_plots_ruraldiet_ctr$df[[i]]
+
+  var_metabo <- unique(tmp_df[tmp_df$timepoint>0.05,"protein"])
+
+  print(paste0(round(length(var_metabo)*100/length(unique(tmp_df$protein)),digits = 2),"% proteins taken for analysis for comparison ",i))
+
+
+  ## add to varpart_features_ruraldiet_ctr
+  varpart_features_ruraldiet_ctr[[i]]$vars <- var_metabo
+}
+```
+
+
+
+### step4: perform dream analysis
+```{r}
+list_dream_ruraldiet_ctr <- list()
+
+for (i in names(varpart_features_ruraldiet_ctr)){
+  print(i)
+
+  myinfo <- varpart_features_ruraldiet_ctr[[i]]$info
+  ## factor for the variables present
+  myinfo$timepoint <- factor(myinfo$timepoint, levels = unique(myinfo$timepoint))
+
+  mydata <- varpart_features_ruraldiet_ctr[[i]]$data
+  ## filter variables
+  mydata <- mydata[which(rownames(mydata) %in% as.character( varpart_features_ruraldiet_ctr[[i]]$vars)),]
+
+  mycontrasts <- c(
+    t0_vs_t1 = "timepointt0 - timepointt1",
+    t0_vs_t2 = "timepointt0 - timepointt2",
+    t1_vs_t2 = "timepointt1 - timepointt2"
+  )
+
+
+  L <- makeContrastsDream(~ 0 + timepoint + (1|PID) , myinfo,
+  contrasts = mycontrasts[names(mycontrasts) == i]
+)
+
+# Visualize contrast matrix
+plotContrasts(L)
+
+fitmm_dream <- dream(mydata, ~ 0 + timepoint + (1|PID), myinfo, L)
+
+fitmm_dream <- eBayes(fitmm_dream)
+
+dream_res <- variancePartition::topTable(fitmm_dream, coef = i, number = Inf, adjust.method = "BH", sort.by = "p", lfc = 0)
+
+dream_res$protein <- rownames(dream_res)
+
+print(nrow(dream_res[dream_res$adj.P.Val <=0.05,]))
+
+list_dream_ruraldiet_ctr[[i]] <- dream_res
+}
+```
+```{r}
+res_dream_ruraldiet_ctr <- do.call(rbind, Map(cbind, comparison = names(list_dream_ruraldiet_ctr),list_dream_ruraldiet_ctr))
+
+head(res_dream_ruraldiet_ctr)
+```
+```{r}
+## add sig
+res_dream_ruraldiet_ctr <- as.data.frame(res_dream_ruraldiet_ctr %>% add_significance(p.col = "adj.P.Val"))
+```
+
+### step5: calculate paire fc
+
+```{r}
+pairedFC_ruraldiet_ctr <- data.frame()
+
+for(i in names(varpart_features_ruraldiet_ctr)){
+  print(i)
+
+  ctr_condition = str_split_fixed(i, "_vs_",2)[,1]
+  test_condition = str_split_fixed(i, "_vs_",2)[,2]
+
+  print(ctr_condition)
+  print(test_condition)
+
+  ctrids <- rownames(subset(varpart_features_ruraldiet_ctr[[i]]$info,
+                            as.character(timepoint) == ctr_condition))
+  testids <- rownames(subset(varpart_features_ruraldiet_ctr[[i]]$info,
+                             as.character(timepoint) == test_condition))
+
+
+
+  tmpfc <- fcros::fcrosFCmat(varpart_features_ruraldiet_ctr[[i]]$data, ctrids, testids, log2.opt = 0)
+
+  tmp_pairedFC <- data.frame(protein = tmpfc$idnames,
+                                       FC = as.numeric(tmpfc$FC),
+                                       FC2 = as.numeric(tmpfc$FC2))
+
+  tmp_pairedFC$log2FC <- log2(tmp_pairedFC$FC)
+  tmp_pairedFC$log2FC2 <- log2(tmp_pairedFC$FC2)
+
+  tmp_pairedFC$direction <- ifelse(tmp_pairedFC$log2FC2>0,"up",  "down")
+
+  tmp_pairedFC$comparison <- i
+
+  pairedFC_ruraldiet_ctr <- rbind(pairedFC_ruraldiet_ctr, tmp_pairedFC)
+}
+```
+### step6: combine dream and paireFC results
+```{r}
+fc_threshold <- 1
+```
+
+```{r}
+### add paired FC
+pairedFC_ruraldiet_ctr$merged <- paste0(pairedFC_ruraldiet_ctr$protein,"_", pairedFC_ruraldiet_ctr$comparison)
+
+res_dream_ruraldiet_ctr$merged <- paste0(res_dream_ruraldiet_ctr$protein,"_", res_dream_ruraldiet_ctr$comparison)
+
+cols_2_add <- c("FC","FC2","log2FC","log2FC2","direction","merged")
+
+res_dream_ruraldiet_ctr <- merge(res_dream_ruraldiet_ctr, pairedFC_ruraldiet_ctr[,cols_2_add], by = "merged")
+
+res_dream_ruraldiet_ctr$regulation <- ifelse(res_dream_ruraldiet_ctr$adj.P.Val.signif != "ns" & abs(res_dream_ruraldiet_ctr$log2FC2) > log2(fc_threshold), res_dream_ruraldiet_ctr$direction, "ns")
+
+rownames(res_dream_ruraldiet_ctr) <- res_dream_ruraldiet_ctr$merged
+
+res_dream_ruraldiet_ctr$protein_simple <- gsub("[[:punct:]]", "", res_dream_ruraldiet_ctr$protein)
+
+res_dream_ruraldiet_ctr$panel <- olink_annotation[match(as.character( res_dream_ruraldiet_ctr$protein_simple), as.character(olink_annotation$simple_protein_name)),"panel_short"]
+
+res_dream_ruraldiet_ctr$panel <- factor(res_dream_ruraldiet_ctr$panel, levels = c("cardiometabo", "inflammation"))
+
+head(res_dream_ruraldiet_ctr)
+```
+
+### step7: list of sig metabolites
+```{r}
+list_sig_dream_ruraldiet_ctr <- list()
+
+for(i in unique(res_dream_ruraldiet_ctr$comparison)){
+
+  print(i)
+
+  list_sig_dream_ruraldiet_ctr[[i]] <- split(
+    subset(res_dream_ruraldiet_ctr, regulation != "ns" & comparison == i)$protein,
+     subset(res_dream_ruraldiet_ctr, regulation != "ns" & comparison == i)$regulation
+    )
+
+}
+
+str(list_sig_dream_ruraldiet_ctr)
+```
+
+
+
+### step8 compare to previous res: SKIP
+
+
+### step9: plots
+count
+```{r}
+count_da_ruraldiet_ctr <- as.data.frame(res_dream_ruraldiet_ctr %>%
+                                      group_by(comparison) %>%
+                                      summarize(up = sum(regulation == "up"),
+                                                down = sum(regulation == "down")))
+
+
+count_da_ruraldiet_ctr <- reshape2::melt(count_da_ruraldiet_ctr)
+
+count_da_ruraldiet_ctr
+```
+
+```{r}
+count_da_ruraldiet_ctr$comparison <- factor(count_da_ruraldiet_ctr$comparison, levels = c("t0_vs_t1","t1_vs_t2","t0_vs_t2"))
+
+ggplot(count_da_ruraldiet_ctr, aes(x= comparison, y= value, fill = variable))+
+  geom_bar(stat = "identity",color = "black", position = "stack")+
+  scale_fill_manual(values = c("up" = "tomato3","down" = "cornflowerblue"))+
+  geom_text(vjust = 1, position = position_stack(), aes(label = value))+
+  theme_bw()+
+  ggtitle("ruraldiet_ctr diet")+
+  theme(aspect.ratio = 1.5)
+```
+
+### triangle - dream results
+
+
+```{r fig.height=8, fig.width=5}
+
+plotdf  <- subset(res_dream_ruraldiet_ctr, adj.P.Val.signif != "ns")
+
+plotdf$comparison <- factor(plotdf$comparison, levels = c("t0_vs_t1","t1_vs_t2","t0_vs_t2"))
+
+max.val <- round(max(abs(plotdf$log2FC2), na.rm = T),1)*1.2
+
+plotdf$order_2 <- ifelse(plotdf$comparison == "t0_vs_t1",plotdf$log2FC2,0)
+
+plotdf <- plotdf[order(plotdf$panel, plotdf$order_2, decreasing = F),]
+
+plotdf$order_3 <- 1:nrow(plotdf)
+
+
+
+## triangle
+triangle_ruraldiet_ctr <-
+  ggplot(plotdf, aes(y = reorder(protein, log2FC2), x = ""))+
+  geom_point( aes(fill = log2FC2, shape = regulation),size = 3)+
+  scale_shape_manual(values = c("up" = 24, "down" = 25))+
+  scale_fill_gradientn(colours = c("blue","white","red"),
+                       limits = c(-max.val, max.val),
+                       guide = guide_colorbar(frame.colour = "black",
+                                              ticks.colour = "black"))+
+  facet_grid(panel~ comparison, scales = "free_y", space = "free")+
+  #scale_y_reordered()+
+  theme_bw()+
+  theme( axis.title =  element_blank())+
+  geom_text(aes(label = adj.P.Val.signif), size = 5)+
+  ggtitle("ruraldiet_ctr")
+
+triangle_ruraldiet_ctr
+
+```
+
+### cross over with diet
+rural diet controls were used as control for Traditional diet and Fermented beverage
+Therefore, we will look which of the proteins found differential there also appear in their control and plot it
+
+```{r}
+list_sig_dream_mbege_crossover <- list()
+
+for(i in names(list_sig_dream_mbege)){
+  print(i)
+  for(j in names(list_sig_dream_mbege[[i]])){
+    print(j)
+    
+   y <-  sapply(list_sig_dream_mbege[[i]][[j]], function(x){ x %in% list_sig_dream_ruraldiet_ctr[[i]][[j]]})
+    
+    list_sig_dream_mbege_crossover[[i]][[j]] <- data.frame(protein = names(y), in_control = y)
+  }
+}
+```
+```{r}
+list_sig_dream_ruraldiet_crossover <- list()
+
+for(i in names(list_sig_dream_ruraldiet_diet)){
+  print(i)
+  for(j in names(list_sig_dream_ruraldiet_diet[[i]])){
+    print(j)
+    
+  y <-  sapply(list_sig_dream_ruraldiet_diet[[i]][[j]], function(x){ x %in% list_sig_dream_ruraldiet_ctr[[i]][[j]]})
+  
+  list_sig_dream_ruraldiet_crossover[[i]][[j]] <- data.frame(protein = names(y), in_control = y)
+  }
+}
+```
+combine results
+```{r}
+## rural diet
+crossover_ruraldiet <- reshape2::melt(list_sig_dream_ruraldiet_crossover)
+colnames(crossover_ruraldiet) <- c("protein","in_control","regulation","comparison")
+crossover_ruraldiet$diet <- "rural_diet"
+
+## mbege
+crossover_mbege <- reshape2::melt(list_sig_dream_mbege_crossover)
+colnames(crossover_mbege) <- c("protein","in_control","regulation","comparison")
+crossover_mbege$diet <- "MBEGE"
+
+## combine
+sig_crossover_control <- rbind(crossover_ruraldiet, crossover_mbege)
+
+head(sig_crossover_control)
+```
+```{r}
+sig_crossover_control$comparison <- factor(sig_crossover_control$comparison, levels = c("t0_vs_t1","t1_vs_t2","t0_vs_t2"))
+sig_crossover_control$diet <- factor(sig_crossover_control$diet, levels = c("urabn_diet","rural_diet","MBEGE"))
+
+ggplot(subset(sig_crossover_control, in_control == TRUE), aes(x= comparison, y= protein))+
+  geom_point(aes(shape = regulation, fill  = regulation), size = 4)+
+  scale_shape_manual(values = c("up" = 24, "down" = 25))+
+  scale_fill_manual(values = c("up" = "red", "down" = "blue"))+
+  facet_wrap(.~diet)
+  
+```
+
+# -----------------------------------------------------
+
+## 5.2. CTR (controls_r: control for urban diet ==controls_r)
+
+DSR - diety study rurla indindividuals
+
+
+### Import data
+### ... metadata
+```{r}
+sample_table_urbandiet_ctr <- read.csv("./241129_sample_table_urbandiet_ctr.csv", row.names = 1)
+
+head(sample_table_urbandiet_ctr)
+```
+
+```{r}
+sample_table_urbandiet_ctr$timepoint <- factor(sample_table_urbandiet_ctr$timepoint, levels = c("t0","t1","t2"))
+
+table(sample_table_urbandiet_ctr$timepoint)
+```
+
+### ... olink data
+```{r}
+olink_urbandiet_ctr <- read.csv("./241129_olink_urbandiet_ctr.csv", row.names = 1)
+
+head(olink_urbandiet_ctr)
+```
+
+```{r}
+olink_urbandiet_ctr <- olink_urbandiet_ctr[match(rownames(sample_table_urbandiet_ctr), rownames(olink_urbandiet_ctr)),]
+
+identical(rownames(olink_urbandiet_ctr), rownames(sample_table_urbandiet_ctr))
+```
+
+
+
+```{r}
+data_melt_urbandiet_ctr <- reshape2::melt(as.matrix(olink_urbandiet_ctr), id.var = "row.names")
+
+colnames(data_melt_urbandiet_ctr) <- c("SampleID","Assay","NPX")
+
+data_melt_urbandiet_ctr <- merge(data_melt_urbandiet_ctr, sample_table_urbandiet_ctr, all.x = T, by.x = "SampleID", by.y = "ID")
+
+
+head(data_melt_urbandiet_ctr)
+```
+
+
+
+### Dream analysis and varpart
+
+### step1: find metabolites contributing to more than 5% variation for each time comparison
+
+
+
+```{r}
+form <- ~ Age + (1 | PID) + timepoint_numeric + BMI_t0 + activity_sum_rank_scaled
+
+varpart_features_urbandiet_ctr <- list()
+
+for ( i in c("t0_vs_t1","t1_vs_t2","t0_vs_t2")){
+  tp1 <- str_split_fixed(i,"_vs_",2)[,1]
+  tp2 <- str_split_fixed(i,"_vs_",2)[,2]
+
+  tmpinfo <- subset(sample_table_urbandiet_ctr, timepoint %in% c(tp1,tp2))
+
+  ## make timepoint variable into numeric
+  tmpinfo$timepoint_numeric <- as.numeric(gsub("t","",tmpinfo$timepoint))
+
+  tmpdata <- olink_urbandiet_ctr[match(tmpinfo$ID, rownames(olink_urbandiet_ctr)),]
+  tmpdata <- t(tmpdata)
+
+  if(identical(tmpinfo$ID, colnames(tmpdata))){
+    print("identical")
+  } else{
+    stop("error, info and data samples not ordered correctly")
+  }
+
+
+  tmpvarpart <- fitExtractVarPartModel(tmpdata, form, tmpinfo)
+
+  # sort variables (i.e. columns) by median fraction
+#       of variance explained
+tmpvarpart <- sortCols(tmpvarpart)
+
+varpart_features_urbandiet_ctr[[i]]$varpart <- tmpvarpart
+varpart_features_urbandiet_ctr[[i]]$info <- tmpinfo
+varpart_features_urbandiet_ctr[[i]]$data <- tmpdata
+
+}
+```
+
+### step2: plot results
+```{r}
+## colors
+colors_vars <- c("Residuals" = "lightgray",
+                 "timepoint_numeric"  = "turquoise",
+                 "Age" = "purple",
+                 "BMI_t0" = "cornflowerblue",
+                 "PID" = "lightyellow",
+                 "activity_sum_rank_scaled" = "tomato3")
+```
+
+```{r}
+list_parvar_plots_urbandiet_ctr <- list()
+
+for (i in names(varpart_features_urbandiet_ctr)){
+  print(i)
+
+tmp_df <- as.data.frame(varpart_features_urbandiet_ctr[[i]]$varpart)
+tmp_df$protein <- rownames(tmp_df)
+tmp_df <- reshape2::melt(tmp_df, id.vars = "protein")
+
+timepoint_var <- subset(tmp_df, variable == "timepoint_numeric")$value
+names(timepoint_var) <- as.character(subset(tmp_df, variable == "timepoint_numeric")$protein)
+
+tmp_df$timepoint <- timepoint_var[match(tmp_df$protein, names(timepoint_var))]
+tmp_df$value100 <- 100*tmp_df$value
+
+## factor
+tmp_df$variable <- factor(tmp_df$variable, levels = rev(c("timepoint_numeric","Age","BMI_t0","activity_sum_rank_scaled", "PID","Residuals")))
+
+
+tmp_df <- tmp_df[order(tmp_df$timepoint, decreasing = T),]
+
+
+# barplot
+tmpplot <- ggplot(subset(tmp_df, timepoint >0.05), aes(x = reorder(protein, timepoint), y = value100, fill = variable))+
+  geom_bar(stat = "identity", position = "stack")+
+  coord_flip()+
+  scale_fill_manual(values = colors_vars)+
+ xlab("")+
+  ylab("% Explained variance")+
+  ggtitle("t0vst1 Top contributions (>5%) - timepoint")
+
+
+list_parvar_plots_urbandiet_ctr[["df"]][[i]] <- tmp_df
+list_parvar_plots_urbandiet_ctr[["plot"]][[i]] <- tmpplot
+}
+```
+```{r fig.width=20, fig.height=10}
+wrap_plots(list_parvar_plots_urbandiet_ctr$plot, nrow = 1, guides = "collect")
+```
+
+### step3: extract metabolites contributing >5% for downstream analysis
+```{r}
+for (i in names(list_parvar_plots_urbandiet_ctr$df)){
+  print(i)
+
+  tmp_df <- NULL
+
+  tmp_df <- list_parvar_plots_urbandiet_ctr$df[[i]]
+
+  var_metabo <- unique(tmp_df[tmp_df$timepoint>0.05,"protein"])
+
+  print(paste0(round(length(var_metabo)*100/length(unique(tmp_df$protein)),digits = 2),"% proteins taken for analysis for comparison ",i))
+
+
+  ## add to varpart_features_urbandiet_ctr
+  varpart_features_urbandiet_ctr[[i]]$vars <- var_metabo
+}
+```
+
+
+
+### step4: perform dream analysis
+```{r}
+list_dream_urbandiet_ctr <- list()
+
+for (i in names(varpart_features_urbandiet_ctr)){
+  print(i)
+
+  myinfo <- varpart_features_urbandiet_ctr[[i]]$info
+  ## factor for the variables present
+  myinfo$timepoint <- factor(myinfo$timepoint, levels = unique(myinfo$timepoint))
+
+  mydata <- varpart_features_urbandiet_ctr[[i]]$data
+  ## filter variables
+  mydata <- mydata[which(rownames(mydata) %in% as.character( varpart_features_urbandiet_ctr[[i]]$vars)),]
+
+  mycontrasts <- c(
+    t0_vs_t1 = "timepointt0 - timepointt1",
+    t0_vs_t2 = "timepointt0 - timepointt2",
+    t1_vs_t2 = "timepointt1 - timepointt2"
+  )
+
+
+  L <- makeContrastsDream(~ 0 + timepoint + (1|PID) , myinfo,
+  contrasts = mycontrasts[names(mycontrasts) == i]
+)
+
+# Visualize contrast matrix
+plotContrasts(L)
+
+
+fitmm_dream <- dream(mydata, ~ 0 + timepoint + (1|PID), myinfo, L)
+
+fitmm_dream <- eBayes(fitmm_dream)
+
+dream_res <- variancePartition::topTable(fitmm_dream, coef = i, number = Inf, adjust.method = "BH", sort.by = "p", lfc = 0)
+
+dream_res$protein <- rownames(dream_res)
+
+print(nrow(dream_res[dream_res$adj.P.Val <=0.05,]))
+
+list_dream_urbandiet_ctr[[i]] <- dream_res
+}
+```
+```{r}
+res_dream_urbandiet_ctr <- do.call(rbind, Map(cbind, comparison = names(list_dream_urbandiet_ctr),list_dream_urbandiet_ctr))
+
+head(res_dream_urbandiet_ctr)
+```
+```{r}
+## add sig
+res_dream_urbandiet_ctr <- as.data.frame(res_dream_urbandiet_ctr %>% add_significance(p.col = "adj.P.Val"))
+```
+
+### step5: calculate paire fc
+
+```{r}
+pairedFC_urbandiet_ctr <- data.frame()
+
+for(i in names(varpart_features_urbandiet_ctr)){
+  print(i)
+
+  ctr_condition = str_split_fixed(i, "_vs_",2)[,1]
+  test_condition = str_split_fixed(i, "_vs_",2)[,2]
+
+  print(ctr_condition)
+  print(test_condition)
+
+  ctrids <- rownames(subset(varpart_features_urbandiet_ctr[[i]]$info,
+                            as.character(timepoint) == ctr_condition))
+  testids <- rownames(subset(varpart_features_urbandiet_ctr[[i]]$info,
+                             as.character(timepoint) == test_condition))
+
+
+
+  tmpfc <- fcros::fcrosFCmat(varpart_features_urbandiet_ctr[[i]]$data, ctrids, testids, log2.opt = 0)
+
+  tmp_pairedFC <- data.frame(protein = tmpfc$idnames,
+                                       FC = as.numeric(tmpfc$FC),
+                                       FC2 = as.numeric(tmpfc$FC2))
+
+  tmp_pairedFC$log2FC <- log2(tmp_pairedFC$FC)
+  tmp_pairedFC$log2FC2 <- log2(tmp_pairedFC$FC2)
+
+  tmp_pairedFC$direction <- ifelse(tmp_pairedFC$log2FC2>0,"up",  "down")
+
+  tmp_pairedFC$comparison <- i
+
+  pairedFC_urbandiet_ctr <- rbind(pairedFC_urbandiet_ctr, tmp_pairedFC)
+}
+```
+### step6: combine dream and paireFC results
+```{r}
+fc_threshold <- 1
+```
+
+```{r}
+### add paired FC
+pairedFC_urbandiet_ctr$merged <- paste0(pairedFC_urbandiet_ctr$protein,"_", pairedFC_urbandiet_ctr$comparison)
+
+res_dream_urbandiet_ctr$merged <- paste0(res_dream_urbandiet_ctr$protein,"_", res_dream_urbandiet_ctr$comparison)
+
+cols_2_add <- c("FC","FC2","log2FC","log2FC2","direction","merged")
+
+res_dream_urbandiet_ctr <- merge(res_dream_urbandiet_ctr, pairedFC_urbandiet_ctr[,cols_2_add], by = "merged")
+
+res_dream_urbandiet_ctr$regulation <- ifelse(res_dream_urbandiet_ctr$adj.P.Val.signif != "ns" & abs(res_dream_urbandiet_ctr$log2FC2) > log2(fc_threshold), res_dream_urbandiet_ctr$direction, "ns")
+
+rownames(res_dream_urbandiet_ctr) <- res_dream_urbandiet_ctr$merged
+
+res_dream_urbandiet_ctr$protein_simple <- gsub("[[:punct:]]", "", res_dream_urbandiet_ctr$protein)
+
+res_dream_urbandiet_ctr$panel <- olink_annotation[match(as.character( res_dream_urbandiet_ctr$protein_simple), as.character(olink_annotation$simple_protein_name)),"panel_short"]
+
+res_dream_urbandiet_ctr$panel <- factor(res_dream_urbandiet_ctr$panel, levels = c("cardiometabo", "inflammation"))
+
+head(res_dream_urbandiet_ctr)
+```
+
+### step7: list of sig metabolites
+```{r}
+list_sig_dream_urbandiet_ctr <- list()
+
+for(i in unique(res_dream_urbandiet_ctr$comparison)){
+
+  print(i)
+
+  list_sig_dream_urbandiet_ctr[[i]] <- split(
+    subset(res_dream_urbandiet_ctr, regulation != "ns" & comparison == i)$protein,
+     subset(res_dream_urbandiet_ctr, regulation != "ns" & comparison == i)$regulation
+    )
+
+}
+
+str(list_sig_dream_urbandiet_ctr)
+```
+
+
+
+### step8 compare to previous res: SKIP
+
+
+### step9: plots
+count
+```{r}
+count_da_urbandiet_ctr <- as.data.frame(res_dream_urbandiet_ctr %>%
+                                      group_by(comparison) %>%
+                                      summarize(up = sum(regulation == "up"),
+                                                down = sum(regulation == "down")))
+
+
+count_da_urbandiet_ctr <- reshape2::melt(count_da_urbandiet_ctr)
+
+count_da_urbandiet_ctr
+```
+
+```{r}
+count_da_urbandiet_ctr$comparison <- factor(count_da_urbandiet_ctr$comparison, levels = c("t0_vs_t1","t1_vs_t2","t0_vs_t2"))
+
+ggplot(count_da_urbandiet_ctr, aes(x= comparison, y= value, fill = variable))+
+  geom_bar(stat = "identity",color = "black", position = "stack")+
+  scale_fill_manual(values = c("up" = "tomato3","down" = "cornflowerblue"))+
+  geom_text(vjust = 1, position = position_stack(), aes(label = value))+
+  theme_bw()+
+  ggtitle("urbandiet_ctr diet")+
+  theme(aspect.ratio = 1.5)
+```
+# ------------------------------------------------------
+
+## 5.3. intersection with diet
+### List DAM all
+```{r}
+
+list_dam_all_dream <- list(urban_diet = unlist(list_sig_dream_urbandiet_diet, recursive = F), 
+                           rural_diet = unlist(list_sig_dream_ruraldiet_diet, recursive = F), 
+                           MBEGE = unlist(list_sig_dream_mbege, recursive = F), 
+                           rural_diet_ctr = unlist(list_sig_dream_ruraldiet_ctr, recursive = F), 
+                           urban_diet_ctr = unlist(list_sig_dream_urbandiet_ctr, recursive = F))
+
+list_dam_all_dream <- unlist(list_dam_all_dream, recursive = F)
+
+str(list_dam_all_dream)
+```
+### mark in res_dream_all DAM in control
+
+```{r}
+res_dream_all$DAM_in_ctr <- NA
+res_dream_all$DAM_in_ctr_up <- NA
+
+for(i in unique(res_dream_all$diet)){
+  print(i)
+  
+  for (j in unique(res_dream_all$comparison)){
+    print(j)
+    
+    if(i == "MBEGE"){
+      lookup <- paste0("rural_diet","_ctr.",j)
+    } else{
+      lookup <- paste0(i, "_ctr.",j)
+    }
+    
+    dam_ctr <-  as.character(unique(unlist(list_dam_all_dream[grepl(lookup, names(list_dam_all_dream))])))
+    
+    dam_ctr_up <- as.character(unique(unlist(list_dam_all_dream[grepl(paste0(lookup,".up"), names(list_dam_all_dream))])))
+
+    
+    res_dream_all[which(res_dream_all$diet == i & res_dream_all$comparison == j & res_dream_all$regulation != "ns"), "DAM_in_ctr"] <- ifelse(as.character(res_dream_all[which(res_dream_all$diet == i & res_dream_all$comparison == j & res_dream_all$regulation != "ns"), "protein"]) %in% dam_ctr, "yes","")
+    
+    res_dream_all[which(res_dream_all$diet == i & res_dream_all$comparison == j & res_dream_all$regulation != "ns"), "DAM_in_ctr_up"] <- ifelse(res_dream_all[which(res_dream_all$diet == i & res_dream_all$comparison == j & res_dream_all$regulation != "ns"), "DAM_in_ctr"] == "yes" &  as.character( res_dream_all[which(res_dream_all$diet == i & res_dream_all$comparison == j & res_dream_all$regulation != "ns"), "protein"]) %in% dam_ctr_up, "up","") 
+    
+  }
+}
+```
+```{r}
+res_dream_all$DAM_in_ctr_direction <- ifelse(res_dream_all$DAM_in_ctr == "yes" & res_dream_all$DAM_in_ctr_up == "","down", res_dream_all$DAM_in_ctr_up)
+## which values are NA or "" will be ns
+
+res_dream_all$DAM_in_ctr_direction <- ifelse(is.na(res_dream_all$DAM_in_ctr_direction)| res_dream_all$DAM_in_ctr_direction =="","ns", res_dream_all$DAM_in_ctr_direction)
+
+unique(res_dream_all$DAM_in_ctr_direction )
+
+```
+change name
+```{r}
+colnames(res_dream_all)[colnames(res_dream_all) == "DAM_in_ctr"] <- "DAP_in_ctr"
+colnames(res_dream_all)[colnames(res_dream_all) == "DAM_in_ctr_direction"] <- "DAP_in_ctr_direction"
+
+head(res_dream_all)
+```
+#### plot
+```{r}
+protein_in_ctr <- unique(subset(res_dream_all, DAP_in_ctr_direction != "ns")$protein)
+plot_intersect <- subset(res_dream_all, protein %in% protein_in_ctr)
+
+plot_intersect <- reshape2::melt(plot_intersect[,c("comparison", "diet","regulation","DAP_in_ctr_direction","protein")], id.vars = c("comparison", "diet","protein" ))
+
+plot_intersect$V1 <- ifelse(plot_intersect$variable == "regulation", "diet", "ctr")
+
+head(plot_intersect)
+```
+
+```{r fig.width=10, fig.height=6}
+plot_intersect$comparison <- factor(plot_intersect$comparison, levels = c("t0_vs_t1","t1_vs_t2","t0_vs_t2"))
+
+plot_intersect <- subset(plot_intersect, value !="ns")
+# plot_intersect <- subset(plot_intersect, !(value %in% c("","ns")))
+# 
+plot_intersect <- as.data.frame(plot_intersect %>% group_by(diet, protein) %>% mutate(sum_ctr = sum(V1 == "ctr")))
+# 
+# plot_intersect <- subset(plot_intersect, sum_indiet >1)
+
+#plot_intersect <- plot_intersect[!is.na(plot_intersect$value),]
+
+ggplot(subset(plot_intersect, sum_ctr >0), aes(x= V1, y = protein, shape = value, fill = value))+
+  geom_point(size = 2)+
+  scale_shape_manual(values = c("up" = 24, "down" = 25) )+
+  scale_fill_manual(values = c("up" = "tomato3", "down" = "cornflowerblue", "ns" = "white"))+
+  facet_grid(diet ~ comparison, scales = "free", space = "free")+
+  theme(axis.title = element_blank())+
+  ggtitle("DAP in controls")
+```
+
+# ====================
+
+# 6. Summary files
+
+## 6.1. Statistical results
+```{r}
+colnames(res_dream_all)
+```
+
+```{r}
+cols_file <- c("protein" ,"AveExpr","t","P.Value","adj.P.Val","adj.P.Val.signif", "comparison", "log2FC","log2FC2","regulation","panel","diet","DAP_in_ctr", "DAP_in_ctr_direction")
+
+export_file <- res_dream_all[,cols_file]
+
+## transform to Diet
+## rename diets
+export_file <- export_file %>%
+  mutate(Diet = case_when(
+    diet == "urban_diet" ~ "Western Diet",
+    diet == "rural_diet" ~ "Traditional Diet",
+    diet == "MBEGE" ~ "Fermented banana beverage", 
+    diet == "controls_u" ~ "Urban Dwellers Control", 
+    diet == "controls_r" ~ "Rural Dwellers Control"
+  ))
+
+export_file$diet <- NULL
+
+export_file$Diet <- factor(export_file$Diet, levels = c("Western Diet", 
+                                                        "Traditional Diet", 
+                                                        "Fermented banana beverage", 
+                                                        "Urban Dwellers Control", 
+                                                        "Rural Dwellers Control"))
+
+export_file$regulation <- factor(export_file$regulation, levels = c("up","down","ns"))
+
+
+
+
+export_file <- export_file[order(export_file$Diet, export_file$comparison, export_file$regulation, export_file$adj.P.Val, decreasing = F),]
+
+
+
+head(export_file)
+```
+
+
+
+
+# ====================
+
+# 7. Session info
+```{r}
+sessionInfo()
+```
+

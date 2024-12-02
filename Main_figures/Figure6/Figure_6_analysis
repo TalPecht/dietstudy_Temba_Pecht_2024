@@ -1,0 +1,581 @@
+---
+title: "RNAseq analysis - analysis of comparison"
+author: "TP"
+date: "2024-12-02"
+output: html_document
+---
+
+# 0. Preperations
+## Load packages
+
+
+## Functions
+
+### ... DEGO
+enrichment analysis for GO terms
+```{r}
+DEGO<-function(input = list_degenes, 
+               p.cutoff = 0.1, show_cat = 50){
+  
+  listgo_de<-list()
+  listgo_de_info<-list()
+  listgo_de_res<-list()
+  
+  for (i in 1:length(input)){
+    
+    namei<-names(input)[i]
+    print(namei)
+    gene_down_i<-input[[i]]$down
+    gene_up_i<-input[[i]]$up
+    
+    
+    ## downregulated genes
+    
+    listgo_de[[paste0(namei,"_down")]]<-NA # plot
+    listgo_de_info[[paste0(namei,"_down")]]<-NA # results table
+    listgo_de_res[[namei]]$down<-NA # enrichment results
+    
+    
+    
+    
+  
+    if(length(gene_down_i)!=0){
+      # trabsfirn to entrez
+      gene_entrez_down_i<-bitr(gene_down_i,
+                               fromType = "SYMBOL",
+                               toType="ENTREZID", 
+                               OrgDb="org.Hs.eg.db")$ENTREZID
+      
+      # enrichment + plot
+      if (length(gene_entrez_down_i)!=0){
+        
+      
+      # enrichment
+      go_enrich_down_i<-enrichGO(gene = gene_entrez_down_i,
+                                 OrgDb = org.Hs.eg.db,
+                                 keyType = 'ENTREZID',
+                                 ont = 'BP',
+                                 pAdjustMethod = 'BH',
+                                 pvalueCutoff = p.cutoff,
+                                 #qvalueCutoff = 0.05,
+                                 readable = TRUE,universe = universe_Entrez)
+      
+      # plot
+      if (!is.null(go_enrich_down_i)){
+        df_dn<- go_enrich_down_i@result
+        df_dn<-df_dn[df_dn$p.adjust<p.cutoff,]
+        
+        plotgo<-dotplot(go_enrich_down_i, showCategory=show_cat) + ggtitle(paste0("GOEA down ",namei)) 
+        
+        ## save in list
+        listgo_de[[paste0(namei,"_down")]]<-plotgo # plot
+        listgo_de_info[[paste0(namei,"_down")]]<- df_dn # results table
+        listgo_de_res[[namei]]$down<-go_enrich_down_i # enrichment results
+      } else {
+        
+        # if there is no enrichment
+        listgo_de[[paste0(namei,"_down")]]<-NA # plot
+        listgo_de_info[[paste0(namei,"_down")]]<-NA # results table
+        listgo_de_res[[namei]]$down<-go_enrich_down_i # enrichment results
+      }
+      
+      }
+    }
+ 
+     
+    ## upregulated genes
+    
+    listgo_de[[paste0(namei,"_up")]]<-NA # plot
+    listgo_de_info[[paste0(namei,"_up")]]<-NA # results table
+    listgo_de_res[[namei]]$up<-NA # enrichment results
+    
+    # enrichment
+    if(length(gene_up_i)!=0){
+      
+      # transfer to entrez id
+      gene_entrez_up_i<-bitr(gene_up_i,
+                             fromType = "SYMBOL",
+                             toType="ENTREZID", 
+                             OrgDb="org.Hs.eg.db")$ENTREZID
+      
+      if (length(gene_entrez_up_i) != 0){
+        
+        go_enrich_up_i<-enrichGO(gene = gene_entrez_up_i,
+                                 OrgDb = org.Hs.eg.db,
+                                 keyType = 'ENTREZID',
+                                 ont = 'BP',
+                                 pAdjustMethod = 'BH',
+                                 pvalueCutoff = p.cutoff,
+                                 #qvalueCutoff = 0.05,
+                                 readable = TRUE,universe = universe_Entrez)
+      # plot
+      if (!is.null(go_enrich_up_i)){
+        df_up<- go_enrich_up_i@result
+        df_up<-df_up[df_up$p.adjust<p.cutoff,]
+        
+        plotgo<-dotplot(go_enrich_up_i, showCategory=show_cat) + ggtitle(paste0("GOEA up ",namei)) 
+        
+        ## save in list
+        listgo_de[[paste0(namei,"_up")]]<-plotgo # plot
+        listgo_de_info[[paste0(namei,"_up")]]<- df_up # results table
+        listgo_de_res[[namei]]$up<-go_enrich_up_i # enrichment results
+      } else {
+        
+        # if there is no enrichment
+        listgo_de[[paste0(namei,"_up")]]<-NA # plot
+        listgo_de_info[[paste0(namei,"_up")]]<-NA # results table
+        listgo_de_res[[namei]]$up<-go_enrich_up_i # enrichment results
+      }
+      
+      }
+      
+    }
+
+  }
+  
+  
+  output<-list(listgo = listgo_de, listgo_info = listgo_de_info, listgo_res = listgo_de_res)
+  output
+  
+}
+```
+
+# 1. Data
+## 1.1. sample table
+
+
+```{r}
+sample_table_urban_0.14 <- sample_table_all[sample_table_all$diet == "urban_diet",]
+sample_table_urban_0.14 <- sample_table_urban_0.14[sample_table_urban_0.14$timepoint != "30d", ]
+
+## exclude outliers
+sample_table_urban_0.14 <- sample_table_urban_0.14[which(!as.character(sample_table_urban_0.14$ID) %in% outliers), ]
+```
+
+```{r}
+ggplot(sample_table_urban_0.14, aes(x= timepoint, y= PID, color = diet))+
+  geom_point()+
+  geom_line(aes(group = PID))
+```
+### leave only paired samples
+DSR16 doesn't have a pair
+
+```{r}
+sample_table_urban_0.14 <- sample_table_urban_0.14[which(!as.character(sample_table_urban_0.14$PID) %in% "DSR16"),]
+
+
+ggplot(sample_table_urban_0.14, aes(x= timepoint, y= PID, color = diet))+
+  geom_point()+
+  geom_line(aes(group = PID))
+```
+```{r}
+table(sample_table_urban_0.14$timepoint, sample_table_urban_0.14$treatment)
+```
+
+
+## 1.2. STAR aligned counts
+```{r}
+library(stringr)
+star.count <- read.table(file = file.path("alignment", "all_samples.tsv"), row.names = 1, header = T, stringsAsFactors = F )
+
+# remove the letter X in the beginning of the seq IDs
+names(star.count)=str_sub(names(star.count),2)
+
+star.count.urban_0.14 <- star.count[,match(as.character(sample_table_urban_0.14$ID), colnames(star.count))]
+```
+
+
+
+# 2. match
+```{r}
+identical(as.character(sample_table_urban_0.14$ID), colnames(star.count.urban_0.14))
+```
+
+# 3. create paired model
+
+#### relevel 
+```{r}
+sample_table_urban_0.14$timepoint <- factor(sample_table_urban_0.14$timepoint, levels = c("0d","14d"))
+```
+
+#### add ind.n
+
+analysis of group-specific condition effects
+For object construction, you can use a simple design, such as ~ ind + cnd, as long as you remember to replace it before running DESeq. Then add a column ind.n which distinguishes the individuals nested within a group. Here, we add this column to coldata, but in practice you would add this column to dds.
+
+
+```{r}
+ctr <- unique(subset(sample_table_urban_0.14, treatment == "ctr")$PID)
+names(ctr) <- c(1:length(ctr))
+
+
+diet <- unique(subset(sample_table_urban_0.14, treatment == "diet")$PID)
+names(diet) <- c(1:length(diet))
+
+names_ctr_diet <- c(ctr,diet)
+
+sample_table_urban_0.14$ind.n <- names(names_ctr_diet[match(as.character(sample_table_urban_0.14$PID), as.character(names_ctr_diet))])
+
+sample_table_urban_0.14$ind.n <- factor(sample_table_urban_0.14$ind.n) 
+```
+
+```{r}
+model.matrix(~ treatment + treatment:ind.n + treatment:timepoint, sample_table_urban_0.14)
+```
+if you have unbalanced numbers of individuals in the two groups, you will have zeros for some of the interactions between grp and ind.n. You can remove these columns manually from the model matrix and pass the corrected model matrix to the full argument of the DESeq function. See example code in the next section. Note that, in this case, you will not be able to create the DESeqDataSet with the design that leads to less than full rank model matrix. 
+```{r}
+model <- model.matrix(~ treatment + treatment:ind.n + treatment:timepoint, sample_table_urban_0.14)
+
+## remove only zero columns
+
+model <- model[,colSums(model)>0]
+
+model
+```
+
+# 4. DESeqDataSetFromMatrix
+
+```{r DESeqDataSetFromMatrix urban diet 0d vs 14d }
+dds_txi <- NULL
+
+dds_txi_urban.014 <- DESeqDataSetFromMatrix(countData = star.count.urban_0.14,  
+                                  colData = sample_table_urban_0.14, 
+                                  design = ~ timepoint)
+
+
+#rm(star.count)
+```
+
+#### insert full model
+```{r}
+design(dds_txi_urban.014) <- model
+
+```
+
+# 5. Pre-filtering
+
+
+
+*Note that more strict filtering to increase power is automatically applied via independent filtering or independent hypothesis weighting on the mean of normalized counts within the results function.*
+```{r}
+gene_annotation <- tx_annotation[!duplicated(tx_annotation$GENEID),c("GENEID", "SYMBOL", "GENETYPE")]
+
+```
+
+```{r}
+table(sample_table_urban_0.14[,c("timepoint","treatment")])
+```
+
+### filtering genes
+```{r filter genes urban diet 0 vs 14}
+genes_to_keep <- NULL
+# filtering genes that have below 10 counts in more than certain number of participants. 
+# option 1 - the cut off number is the median number of participants per analysis group (deseq_model_parameter)
+genes_to_keep <- genes_to_keep <- rowSums(counts(dds_txi_urban.014) >= 10) >= 5
+
+nrow(dds_txi_urban.014)
+
+
+sum(genes_to_keep)
+```
+
+**Number of genes after filtering is:** `r sum(genes_to_keep) `
+
+
+```{r}
+dds_urban_diet_014 <- dds_txi_urban.014[genes_to_keep,]
+```
+
+
+
+remove hb/ribo
+```{r}
+genes <- rownames(dds_urban_diet_014)
+length(genes)
+ non_hb_ribo_genes <-  gene_annotation[!grepl("^HBA|^HBB|^HBD|HBE1|HBE2|^HBG|^HBM|^RPS|^RPL|^MT-", gene_annotation$SYMBOL),1]
+
+genes_to_keep <- genes %in% non_hb_ribo_genes
+
+sum(genes_to_keep)
+```
+
+```{r}
+dds_urban_diet_014 <- dds_urban_diet_014[genes_to_keep,]
+```
+
+**Number of genes after filtering is:** `r sum(genes_to_keep) `
+
+# 6. DESeq calculations
+
+
+```{r DESeq calculation urban diet 14 vs 0}
+dds_urban_diet_014 <- DESeq(dds_urban_diet_014)
+```
+
+
+
+```{r dispresion urban diet 0 vs 14}
+plotDispEsts(dds_urban_diet_014)
+```
+```{r}
+summary(dds_urban_diet_014)
+```
+
+
+
+# 7. Normalized counts 
+
+### Normalized count table
+For inspection of the normalized data, we write the normalized counts into a data.frame called "norm_anno".
+```{r normalized annotation urban diet 0 vs 14}
+norm_anno <- as.data.frame(counts(dds_urban_diet_014, normalized=T))
+  norm_anno$GENEID <- row.names(norm_anno)
+
+  # add gene annotation extracted from the gtf file
+  gene_annotation <- tx_annotation[!duplicated(tx_annotation$GENEID),c("GENEID", "SYMBOL", "GENETYPE")]
+  gene_annotation <- gene_annotation[match(rownames(norm_anno), gene_annotation$GENEID), ]
+  
+biomart <- read.delim("/home/tal/data/Data/biomart_HumanGRCh38.p13_20191214.txt", stringsAsFactors = FALSE)
+
+
+  idx <- match(unlist(lapply(strsplit(gene_annotation$GENEID, split = "[.]"), `[[`, 1)), biomart$Gene.stable.ID)
+gene_annotation$DESCRIPTION <- biomart$Gene.description[idx]
+gene_annotation$CHR <- biomart$Chromosome.scaffold.name[idx]
+
+ # merge expression table and annotation
+norm_anno <- merge(norm_anno,
+                   gene_annotation,
+                   by = "GENEID")
+rownames(norm_anno) <- norm_anno$GENEID
+
+norm_anno$GENEID_SYMBOL<-paste0(norm_anno$GENEID,":", norm_anno$SYMBOL)
+
+norm_anno[1:3,c(1:2, (ncol(norm_anno)-5):ncol(norm_anno))]
+
+  tmp <- list("gene_annotation" = gene_annotation,
+              "norm_anno" = norm_anno)
+  
+norm_anno_urban_diet_014 <- norm_anno  
+```
+
+
+```{r}
+head(norm_anno_urban_diet_014)
+```
+
+
+
+
+
+# 8. Variance stabilizing transformation
+
+
+
+```{r varStab urban diet 0 vs 14}
+dds_vst_urban_diet_014 <- vst(dds_urban_diet_014, blind = TRUE)
+```
+
+
+
+### plot dipresion
+Plot row standard deviations versus row means
+```{r meanSdPlot urban diet 0 vs 14, echo=TRUE}
+meanSdPlot(as.matrix(assay(dds_vst_urban_diet_014)), ranks = FALSE)
+```
+
+
+
+
+# 9. DE analysis - urban diet 14 vs 0
+
+## DE, alpha 0.2 
+
+```{r}
+# IHW
+res_deseq_lfc_urban_diet_014.diet <- results(dds_urban_diet_014,
+                               contrast = list("treatmentdiet.timepoint14d"),
+                               lfcThreshold = 0,
+                               alpha = 0.2,
+                               filterFun = ihw,
+                               altHypothesis = "greaterAbs")
+
+
+# normal shrinkage ( had probklems with apglem )
+res_deseq_lfc_urban_diet_014.diet <- lfcShrink(dds =  dds_urban_diet_014, 
+                                   res = res_deseq_lfc_urban_diet_014.diet,
+                                   coef= which(resultsNames(dds_urban_diet_014) == "treatmentdiet.timepoint14d"), 
+                                   type="normal", 
+                                  returnList = F
+                                   )
+
+res_deseq_lfc_urban_diet_014.diet
+```
+```{r}
+# IHW
+res_deseq_lfc_urban_diet_014.ctr <- results(dds_urban_diet_014,
+                               contrast = list("treatmentctr.timepoint14d"),
+                               lfcThreshold = 0,
+                               alpha = 0.2,
+                               filterFun = ihw,
+                               altHypothesis = "greaterAbs")
+
+
+# apeglm shrinkage
+res_deseq_lfc_urban_diet_014.ctr <- lfcShrink(dds =  dds_urban_diet_014, 
+                                   res = res_deseq_lfc_urban_diet_014.ctr,
+                                   coef= which(resultsNames(dds_urban_diet_014) == "treatmentctr.timepoint14d"), 
+                                   type="normal", 
+                                  returnList = F
+                                   )
+
+res_deseq_lfc_urban_diet_014.ctr
+```
+```{r}
+gc()
+```
+
+### contrast
+```{r}
+resultsNames(dds_urban_diet_014)
+contrast_014 <- results(dds_urban_diet_014, contrast=list("treatmentctr.timepoint14d","treatmentdiet.timepoint14d"))
+
+contrast_014$GENEID <- rownames(contrast_014)
+contrast_014$SYMBOL <- norm_anno_urban_diet_014[match(contrast_014$GENEID, norm_anno_urban_diet_014$GENEID),"SYMBOL"]
+```
+
+```{r}
+length(contrast_014[contrast_014$padj<0.2,])
+
+contrast_014[contrast_014$padj<0.2,]
+```
+
+
+### DIET
+```{r}
+## add columns, GENEID, SYMBOL, Sig, regulation
+res_deseq_lfc_urban_diet_014.diet$GENEID <- rownames(res_deseq_lfc_urban_diet_014.diet)
+res_deseq_lfc_urban_diet_014.diet$SYMBOL <- norm_anno_urban_diet_014[match(res_deseq_lfc_urban_diet_014.diet$GENEID, norm_anno_urban_diet_014$GENEID),"SYMBOL"]
+res_deseq_lfc_urban_diet_014.diet$significance <- ifelse(res_deseq_lfc_urban_diet_014.diet$padj <= 0.2, "sig", "n.s.")
+res_deseq_lfc_urban_diet_014.diet$direction <- ifelse(res_deseq_lfc_urban_diet_014.diet$log2FoldChange >0, "up", "down")
+res_deseq_lfc_urban_diet_014.diet$SYMBOL_GENEID <- paste0(res_deseq_lfc_urban_diet_014.diet$SYMBOL, "_", res_deseq_lfc_urban_diet_014.diet$GENEID)
+```
+
+
+```{r}
+list_de_urban_diet_014_symbol.diet <- list(up = res_deseq_lfc_urban_diet_014.diet[res_deseq_lfc_urban_diet_014.diet$significance == "sig" & res_deseq_lfc_urban_diet_014.diet$direction == "up","SYMBOL_GENEID"], 
+                               down = res_deseq_lfc_urban_diet_014.diet[res_deseq_lfc_urban_diet_014.diet$significance == "sig" & res_deseq_lfc_urban_diet_014.diet$direction == "down","SYMBOL_GENEID"])
+
+
+list_de_urban_diet_014_symbol.diet
+```
+
+
+```{r}
+lapply(list_de_urban_diet_014_symbol.diet, length)
+```
+
+```{r}
+tmp_vst <- vst_anno_log_urban014[which(vst_anno_log_urban014$SYMBOL_GENEID %in% unique(unlist(list_de_urban_diet_014_symbol.diet))),which(colnames(vst_anno_log_urban014) %in% c(subset(sample_table_urban_0.14, treatment == "diet")$ID, "SYMBOL_GENEID"))]
+
+rownames(tmp_vst) <- tmp_vst$SYMBOL_GENEID
+
+tmp_vst <- tmp_vst[,which(colnames(tmp_vst) %in% sample_table_urban_0.14$ID)]
+tmp_vst$SYMBOL_GENEID <- rownames(tmp_vst)
+
+tmp_vst <- reshape2::melt(tmp_vst, var.id = "SYMBOL_GENEID") 
+
+colnames(tmp_vst) <- c("SYMBOL_GENEID","ID","vst_exp")
+
+tmp_vst$timepoint <- sample_table_urban_0.14[match(tmp_vst$ID, sample_table_urban_0.14$ID),"timepoint"]
+tmp_vst$PID <- sample_table_urban_0.14[match(tmp_vst$ID, sample_table_urban_0.14$ID),"PID"]
+
+```
+
+color by direction
+```{r fig.height=20, fig.width=20}
+tmp_vst_direction <- tmp_vst %>% 
+              group_by(SYMBOL_GENEID, PID) %>%
+              summarize(delta = vst_exp - lag(vst_exp))
+
+tmp_vst_direction <- as.data.frame(tmp_vst_direction)
+
+tmp_vst_direction <- tmp_vst_direction[!is.na(tmp_vst_direction$delta),]
+tmp_vst_direction$direction <- ifelse(tmp_vst_direction$delta>0,"down","up")              
+
+
+tmp_vst_direction$symbol_pid <- paste0(tmp_vst_direction$SYMBOL_GENEID,"_",tmp_vst_direction$PID)
+
+
+tmp_vst$symbol_pid <- paste0(tmp_vst$SYMBOL_GENEID,"_",tmp_vst$PID)
+
+tmp_vst$direction <- tmp_vst_direction[match(tmp_vst$symbol_pid, tmp_vst_direction$symbol_pid),"direction"]
+
+tmp_vst$label <- ifelse(as.character(tmp_vst$timepoint) == "14d" , as.character(tmp_vst$PID), NA)
+
+
+
+```
+```{r fig.height=18, fig.width=18}
+tmp_vst$regulation <- ifelse(tmp_vst$SYMBOL_GENEID %in% list_de_urban_diet_014_symbol.diet$up , "up", "down")
+
+tmp_vst$outlier <- ifelse(tmp_vst$direction == tmp_vst$regulation, "", "outlier")
+
+numbe_outlier <- tmp_vst %>%
+                group_by(PID) %>%
+                summarize(n_outlier = sum(outlier == "outlier")/2) # divide by two bcs the number of the timepoints
+
+numbe_outlier
+```
+
+heatmap
+```{r fig.height=10, fig.width=10}
+heatmap_mtx <- spread(tmp_vst[,c(1:3)], key = "SYMBOL_GENEID", value = "vst_exp") 
+rownames(heatmap_mtx) <- heatmap_mtx$ID
+heatmap_mtx$ID <- NULL
+
+heatmap_mtx_scale <- t(scale(heatmap_mtx))
+
+plot_anno <- sample_table_urban_0.14[,c("timepoint","PID", "treatment"), drop = F]
+
+genes_anno <- as.data.frame(res_deseq_lfc_urban_diet_014.diet[res_deseq_lfc_urban_diet_014.diet$significance == "sig",c("direction"), drop = F])
+rownames(genes_anno) <- res_deseq_lfc_urban_diet_014.diet[res_deseq_lfc_urban_diet_014.diet$significance == "sig",]$SYMBOL_GENEID
+
+tmp_sample_table <- subset(sample_table_urban_0.14, treatment == "diet")
+
+heatmap_mtx_scale <- heatmap_mtx_scale[,order(tmp_sample_table$timepoint, tmp_sample_table$PID, decreasing = F)]
+
+pheatmap(heatmap_mtx_scale, cluster_rows = T,  
+         cluster_cols = F, 
+         annotation_colors = list(timepoint = col_timepoint, 
+                                  direction =c( "up" = "tomato3", "down" = "cornflowerblue"), treatment = col_treatment),
+         annotation_row = genes_anno,
+         annotation_col = plot_anno, 
+         show_colnames = F, fontsize = 3,
+         breaks = scaleColors(data = heatmap_mtx_scale, maxvalue = 2)[["breaks"]],
+           color = scaleColors(data = heatmap_mtx_scale, maxvalue = 2)[["color"]], 
+         main = "Diet, urban diet 14 vs 0, alpha 0.2")
+```
+
+# 10. Enrichment
+```{r}
+# define universe
+universe <- as.character(norm_anno_urban_diet_014$SYMBOL)
+# change symbols to ENTREZ IDs (necessary for ClusterProfiler)
+universe_Entrez <- bitr(universe, 
+                        fromType="SYMBOL", 
+                        toType="ENTREZID", 
+                        OrgDb="org.Hs.eg.db")$ENTREZID
+
+universe_Entrez_df<-bitr(universe, 
+                        fromType="SYMBOL", 
+                        toType="ENTREZID", 
+                        OrgDb="org.Hs.eg.db")
+```
+
+```{r}
+list_de_urban_diet_014_symbol.diet_SYMBOL <- list(up = res_deseq_lfc_urban_diet_014.diet[res_deseq_lfc_urban_diet_014.diet$significance == "sig" & res_deseq_lfc_urban_diet_014.diet$log2FoldChange >0,"SYMBOL"], 
+                               down = res_deseq_lfc_urban_diet_014.diet[res_deseq_lfc_urban_diet_014.diet$significance == "sig" & res_deseq_lfc_urban_diet_014.diet$log2FoldChange <0,"SYMBOL"])
+
+
+GO_model_0vs14 <- DEGO(input = list(urban = list_de_urban_diet_014_symbol.diet_SYMBOL), p.cutoff = 0.05, show_cat = 50)
+```

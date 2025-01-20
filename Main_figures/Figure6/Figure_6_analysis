@@ -140,6 +140,500 @@ DEGO<-function(input = list_degenes,
 }
 ```
 
+### ... TF overrepresentation
+```{r}
+TF_overrep <- function(topTF = 5, # or "all"
+                       topTarget = 5,# or "all"
+                       input = "DEresults",
+                       inputdata = DEresults, 
+                       fullDEobj = TRUE, 
+                       include_targets = "both" 
+                       ) {
+  
+  require(httr)
+  require(jsonlite)
+  url = "https://amp.pharm.mssm.edu/chea3/api/enrich/"
+  encode = "json"
+  output <- list()
+  
+  if (input == "DEresults"){
+    if (fullDEobj == TRUE){
+      inputdata = inputdata[2:length(inputdata)]
+    } else {
+      inputdata = inputdata
+    }
+    
+    for (c in unique(names(inputdata))) {
+      print(c)
+      genesup <-
+        c(inputdata[[c]]@DE_genes$up_regulated_Genes[, "SYMBOL"])
+      genesdn <-
+        c(inputdata[[c]]@DE_genes$down_regulated_Genes[, "SYMBOL"])
+      
+      # both but all genes are NULL
+      if (include_targets == "both" & length(c(genesup, genesdn))<=1) {
+        output[[c]] <- NULL
+        next
+      }
+      # one, and all genes are null
+      if (include_targets == "one" &
+          length(genesup) <=1 & length(genesdn)<=1) {
+        output[[c]] <- NULL
+        next
+      }
+      
+      # both but only one geneset is NULL
+      if (include_targets == "both" ) {
+        #POST to ChEA3 server- algenesdnl genes
+        payload = list(query_name = "myQuery",
+                       gene_set = c(genesup, genesdn))
+        response = POST(url = url,
+                        body = payload,
+                        encode = encode)
+        json = httr::content(response, as = "text")
+        # resultsall
+        resultsall = fromJSON(json)
+        resultsall = resultsall$`Integrated--meanRank`
+        resultsall$regulation_TF <-
+          ifelse(resultsall$TF %in% genesup, "up", "down")
+      } 
+      
+      if (include_targets == "one") {
+        if (length(genesup)>1) {
+          payload_up = list(query_name = "myQuery", gene_set = genesup)
+          response_up = POST(url = url,
+                             body = payload_up,
+                             encode = encode)
+          json_up = httr::content(response_up, as = "text")
+          #results as list of R dataframes
+          results_up = fromJSON(json_up)
+          results_up <- results_up$`Integrated--meanRank`
+          results_up$regulation <- "up"
+          results_up = results_up[which(results_up$TF %in% genesup),]
+        } else {
+          resultlist$up <- NULL
+        }
+       
+        if (length(genesdn)>1) {
+          #down
+          payload_dn = list(query_name = "myQuery", gene_set = genesdn)
+          response_dn = POST(url = url,
+                             body = payload_dn,
+                             encode = encode)
+          json_dn = httr::content(response_dn, as = "text")
+          #downregulated genes
+          results_dn = fromJSON(json_dn)
+          results_dn <- results_dn$`Integrated--meanRank`
+          results_dn$regulation <- "down"
+          results_dn = results_dn[which(results_dn$TF %in% genesdn),]
+        } else {
+          results_dn <- NULL
+        }
+        resultsall <- rbind(results_up, results_dn)
+        
+      }
+      
+      
+      # extract those from meanRank since meanRank scored as best method:
+      resultlist <- list()
+      # sepeate up and down
+      res_up <- resultsall[resultsall$regulation == "up", ]
+      res_dn <- resultsall[resultsall$regulation == "down", ]
+      
+      if (topTarget == "all"){
+        tt<- TRUE
+      } else {
+        tt = 1:topTarget
+      }
+      
+      if (topTF !="all"){
+      if (is.character(topTF)){
+        for (i in topTF){
+          tf_up <- i
+          overlapping_genes_up <- res_up[res_up$TF==i,"Overlapping_Genes"] %>%
+            base::strsplit(., split = ",") %>%
+            unlist(.)
+          tarup<-overlapping_genes_up[tt]
+          resultlist$up[[tf_up]] <-list(TF = tf_up, targets = tarup[!is.na(tarup)])
+          tf_dn <- i
+          overlapping_genes_dn <- res_dn[res_dn$TF==i,"Overlapping_Genes"] %>%
+            base::strsplit(., split = ",") %>%
+            unlist(.)
+          tardn<- overlapping_genes_dn[tt]
+          resultlist$down[[tf_dn]] <-
+            list(TF = tf_dn, targets = tardn[!is.na(tardn)])
+        } 
+      }else {
+        for (i in 1:topTF) {
+          tf_up <- res_up$TF[i]
+          overlapping_genes_up <- res_up$Overlapping_Genes[i] %>%
+            base::strsplit(., split = ",") %>%
+            unlist(.)
+          tarup<-overlapping_genes_up[tt]
+          resultlist$up[[tf_up]] <-list(TF = tf_up, targets = tarup[!is.na(tarup)])
+          tf_dn <- res_dn$TF[i]
+          overlapping_genes_dn <- res_dn$Overlapping_Genes[i] %>%
+            base::strsplit(., split = ",") %>%
+            unlist(.)
+          tardn<- overlapping_genes_dn[tt]
+          resultlist$down[[tf_dn]] <-
+            list(TF = tf_dn, targets = tardn[!is.na(tardn)])
+        }
+      }
+      } else {
+        for (i in 1:nrow(res_up)) {
+          tf_up <- res_up$TF[i]
+          overlapping_genes_up <- res_up$Overlapping_Genes[i] %>%
+            base::strsplit(., split = ",") %>%
+            unlist(.)
+          tarup<-overlapping_genes_up[tt]
+          resultlist$up[[tf_up]] <-list(TF = tf_up, targets = tarup[!is.na(tarup)])
+        }
+        for (j in 1:nrow(res_dn)){
+          tf_dn <- res_dn$TF[j]
+          overlapping_genes_dn <- res_dn$Overlapping_Genes[j] %>%
+            base::strsplit(., split = ",") %>%
+            unlist(.)
+          tardn<- overlapping_genes_dn[tt]
+          resultlist$down[[tf_dn]] <-
+            list(TF = tf_dn, targets = tardn[!is.na(tardn)])
+        }
+        }
+      output[[c]] <- resultlist
+    }
+  } else if (input !="DEresults" & is.character(inputdata)) {
+    #POST to ChEA3 server- algenesdnl genes
+    payload = list(query_name = "myQuery",
+                   gene_set = inputdata)
+    response = POST(url = url,
+                    body = payload,
+                    encode = encode)
+    json = httr::content(response, as = "text")
+    # resultsall
+    resultsall = fromJSON(json)
+    resultsall = resultsall$`Integrated--meanRank`
+    resultsall = resultsall[which(resultsall$TF %in% inputdata),]
+    
+    resultlist <- list()
+    
+    if (topTarget == "all"){
+      tt<- TRUE
+    } else {
+      tt = 1:topTarget
+    }
+    
+    if (topTF !="all"){
+    if (is.character(topTF)){
+      for (i in topTF){
+        tfa <- i
+        overlapping_genes <- resultsall[resultsall$TF==i,"Overlapping_Genes"] %>%
+          base::strsplit(., split = ",") %>%
+          unlist(.)
+        tar<-overlapping_genes[tt]
+        resultlist[[tfa]] <-list(TF = tfa, targets = tar[!is.na(tar)])
+      } 
+    } else {
+      for (i in 1:topTF) {
+        tfa <- resultsall$TF[i]
+        overlapping_genes <- resultsall$Overlapping_Genes[i] %>%
+          base::strsplit(., split = ",") %>%
+          unlist(.)
+        tar<-overlapping_genes[tt]
+        resultlist[[tfa]] <-list(TF = tfa, targets = tar[!is.na(tar)])
+      }
+    }
+    } else {
+      for (i in 1:nrow(resultsall)) {
+        tf_up <- resultsall$TF[i]
+        overlapping_genes_up <- resultsall$Overlapping_Genes[i] %>%
+          base::strsplit(., split = ",") %>%
+          unlist(.)
+        tarup<-overlapping_genes_up[tt]
+        resultlist[[tf_up]] <-list(TF = tf_up, targets = tarup[!is.na(tarup)])
+      }
+    }
+    output <- resultlist
+  } else {
+    print("use as input DEresults or another charachter vector")
+  }
+  return(output)    
+    
+  }
+```
+
+### ... TF plot
+```{r}
+plot_TF_enrichment <- function(overrep_results, 
+                               type= "individual", #choose integrated or individual
+                               input = "DEresults",
+                               source = DEresults, 
+                               colorup = "tomato2",
+                                 colordn = "cornflowerblue",
+                               main_title = title
+                               ){
+  require(circlize)
+  
+  if (input == "DEresults"){
+    dflist <- list()
+    TFs <- NULL
+    for(c in names(overrep_results)){
+      print(c)
+      genesup<- as.character(source[[c]]@DE_genes$up_regulated_Genes[,"SYMBOL"])
+      genesdown<- as.character(source[[c]]@DE_genes$down_regulated_Genes[,"SYMBOL"])
+      tmp<-NULL
+      
+      #up
+      for(t in  names(overrep_results[[c]]$up)[!is.na(names(overrep_results[[c]]$up))]){
+        TFs <- c(TFs, t)
+        tmp_df_up <- data.frame(TF = rep(t, length(overrep_results[[c]][["up"]][[t]][["targets"]])),
+                                Target = overrep_results[[c]][["up"]][[t]][["targets"]],
+                                regulation = rep("up", length(overrep_results[[c]][["up"]][[t]][["targets"]])),
+                                colorTF = rep (colorup,length(overrep_results[[c]][["up"]][[t]][["targets"]])),
+                                colorTarget = ifelse(overrep_results[[c]][["up"]][[t]][["targets"]] %in% genesup,colorup,colordn ))
+        #tmp_df <- merge(tmp_df, gtc, by.x = "Target", by.y = "gene")
+        colnames(tmp_df_up) <- c("TF", "Target", "regulation", "colorTF","colorTarget")
+        tmp <- rbind(tmp, tmp_df_up)
+      } 
+      #down
+      for(t in names(overrep_results[[c]]$down)[!is.na(names(overrep_results[[c]]$down))]){
+        TFs <- c(TFs, t)
+        tmp_df_down <- data.frame(TF = rep(t, length(overrep_results[[c]][["down"]][[t]][["targets"]])),
+                                  Target = overrep_results[[c]][["down"]][[t]][["targets"]],
+                                  regulation = rep("down", length(overrep_results[[c]][["down"]][[t]][["targets"]])),
+                                  colorTF = rep (colordn,length(overrep_results[[c]][["down"]][[t]][["targets"]])),
+                                  colorTarget = ifelse(overrep_results[[c]][["down"]][[t]][["targets"]] %in% genesup,colorup,colordn ))
+        #tmp_df <- merge(tmp_df, gtc, by.x = "Target", by.y = "gene")
+        #colnames(tmp_df_down) <- c("TF", "Target",  "regulation", "colorTF","colorTarget")
+        tmp <- rbind(tmp, tmp_df_down)
+      }
+    
+    # add table of results to output list  
+    dflist[[c]] <- tmp
+    }
+    
+    #vector of all TF
+    TFs <- unique(as.character(TFs))
+    
+    
+    #create directory
+    dir.create(paste0(dir,"/circos.plots"), recursive = T)
+    
+    #open session for pdf
+    Cairo::CairoPDF(file =paste0(dir,"/circos.plots/",gsub(":","-",as.character(Sys.time())),"circos_plots.pdf"), width = 12,
+                    height = 7, onefile = T)
+    # loop in pairs of two to create douple plots:
+    if (type != "together" ){
+      n_plots<-length(dflist)
+    }else {
+      n_plots<-2*(length(dflist))
+    }
+    
+    
+      # i1 <- n_plots*2-1
+      # i2 <- n_plots*2
+      # set layout to plot two plots each in horizontal arrangement
+      layout(matrix(1:2, 1, 2))
+      
+      
+
+        for(j in 1:n_plots){
+          # catching 'out-of-bounds':
+          # if(j > length(overrep_results)){
+          #   break
+          # }
+          
+          if (type != "together"){
+            for (e in c("up","down")){
+              # create link data frame:
+              fromto <- dflist[[j]]
+              fromto <- fromto[fromto$regulation == e,]
+              # only consider no TF targets:
+              fromto <- dplyr::filter(fromto, !Target %in% TFs)
+              fromto <- fromto[complete.cases(fromto),]
+              fromto <- unique(fromto)
+              
+              
+              # dataframe that associates each gene with its clsuter colour:
+              NodeToColor <- rbind(data.frame(gene = fromto$TF, color = fromto$colorTF),
+                                   data.frame(gene = fromto$Target, color = fromto$colorTarget))%>%
+                unique()
+              
+              # create plot factors:
+              factors <- unique(as.character(NodeToColor$gene))
+              circos.par(points.overflow.warning=FALSE)
+              circos.initialize(factors, xlim = c(0, 1))
+              circos.trackPlotRegion(ylim = c(0, 1), track.height = 0.05, bg.col = as.character(NodeToColor$color),
+                                     bg.border = NA )
+              # add sector labels:
+              g <- circos.trackPlotRegion(track.index = 1, panel.fun = function(x,y){
+                xlim = get.cell.meta.data("xlim")
+                ylim = get.cell.meta.data("ylim")
+                sector.name = get.cell.meta.data("sector.index")
+                
+                if(sector.name %in% TFs){
+                  circos.text(mean(xlim), mean(ylim)+2.5, sector.name, facing = "inside", niceFacing = T, cex = .9,
+                              col = "turquoise3", font = 2)
+                }else{
+                  circos.text(mean(xlim), mean(ylim)+2.5, sector.name, facing = "inside", niceFacing = T, cex = .9)
+                }
+                
+              })
+              
+              # add links
+              for(i in 1:nrow(fromto)) {
+                g <- circos.link(sector.index1 =  as.character(fromto[i,1]), c(0.45, 0.55),
+                                 sector.index2 =  as.character(fromto[i,2]), c(.92),
+                                 col = as.character(fromto[i,4]),
+                                 directional = 1,
+                                 arr.width = .1,
+                                 arr.length = .1)
+                
+                
+              }
+              title(paste0(names(overrep_results)[j],"_",e))
+              circos.clear()  
+            }
+          } else {
+            # create link data frame:
+            fromto <- dflist[[j]]
+            # only consider no TF targets:
+            fromto <- dplyr::filter(fromto, !Target %in% TFs)
+            fromto <- fromto[complete.cases(fromto),]
+            fromto <- unique(fromto)
+            
+            
+            # dataframe that associates each gene with its clsuter colour:
+            NodeToColor <- rbind(data.frame(gene = fromto$TF, color = fromto$colorTF),
+                                 data.frame(gene = fromto$Target, color = fromto$colorTarget))%>%
+              unique()
+            
+            # create plot factors:
+            factors <- unique(as.character(NodeToColor$gene))
+            circos.par(points.overflow.warning=FALSE)
+            circos.initialize(factors, xlim = c(0, 1))
+            circos.trackPlotRegion(ylim = c(0, 1), track.height = 0.05, bg.col = as.character(NodeToColor$color),
+                                   bg.border = NA )
+            # add sector labels:
+            g <- circos.trackPlotRegion(track.index = 1, panel.fun = function(x,y){
+              xlim = get.cell.meta.data("xlim")
+              ylim = get.cell.meta.data("ylim")
+              sector.name = get.cell.meta.data("sector.index")
+              
+              if(sector.name %in% TFs){
+                circos.text(mean(xlim), mean(ylim)+2.5, sector.name, facing = "inside", niceFacing = T, cex = .9,
+                            col = "turquoise3", font = 2)
+              }else{
+                circos.text(mean(xlim), mean(ylim)+2.5, sector.name, facing = "inside", niceFacing = T, cex = .9)
+              }
+              
+            })
+            
+            # add links
+            for(i in 1:nrow(fromto)) {
+              g <- circos.link(sector.index1 =  as.character(fromto[i,1]), c(0.45, 0.55),
+                               sector.index2 =  as.character(fromto[i,2]), c(.92),
+                               col = as.character(fromto[i,4]),
+                               directional = 1,
+                               arr.width = .1,
+                               arr.length = .1)
+              
+              
+            }
+            title(names(overrep_results)[j])
+            circos.clear()  
+          }
+      } 
+        
+      } else {
+    dflist <- list()
+    TFs <- NULL
+    tmp<-NULL
+    for(t in names(overrep_results)[!is.na(names(overrep_results))]){
+        TFs <- c(TFs, t)
+        tmp_df_up <- data.frame(TF = rep(t, length(overrep_results[[t]][["targets"]])),
+                                Target = overrep_results[[t]][["targets"]],
+                                compareTF = rep("up", length(overrep_results[[t]][["targets"]])),
+                                colorTF = rep (colorup,length(overrep_results[[t]][["targets"]])),
+                                colorTarget = rep (colorup,length(overrep_results[[t]][["targets"]])))
+        #tmp_df <- merge(tmp_df, gtc, by.x = "Target", by.y = "gene")
+        colnames(tmp_df_up) <- c("TF", "Target", "regulation", "colorTF","colorTarget")
+        tmp <- rbind(tmp, tmp_df_up)
+      }
+      
+      dflist[["vec"]] <- tmp
+      
+    
+    TFs <- unique(as.character(TFs))
+    
+    
+    #create directory
+    dir.create(paste0(dir,"/circos.plots"), recursive = T)
+    
+    #open session for pdf
+    Cairo::CairoPDF(file =paste0(dir,"/circos.plots/",gsub(":","-",as.character(Sys.time())),"circos_plots.pdf"), width = 12,
+                    height = 7, onefile = T)
+    # create just one plot
+    n_plots = 1
+    
+      # set layout to plot two plots each in horizontal arrangement
+      layout(matrix(1:2, 1, 2))
+
+          
+          # create link data frame:
+          fromto <- dflist[["vec"]]
+          # only consider no TF targets:
+          fromto <- dplyr::filter(fromto, !Target %in% TF)
+          fromto <- fromto[complete.cases(fromto),]
+          fromto <- unique(fromto)
+          
+          
+          # dataframe that associates each gene with its clsuter colour:
+          NodeToColor <- rbind(data.frame(gene = fromto$TF, color = fromto$colorTF),
+                               data.frame(gene = fromto$Target, color = fromto$colorTarget))%>%
+            unique()
+          
+          # create plot factors:
+          factors <- unique(as.character(NodeToColor$gene))
+          circos.par(points.overflow.warning=FALSE)
+          circos.initialize(factors, xlim = c(0, 1))
+          circos.trackPlotRegion(ylim = c(0, 1), track.height = 0.05, bg.col = as.character(NodeToColor$color),
+                                 bg.border = NA )
+          # add sector labels:
+          g <- circos.trackPlotRegion(track.index = 1, panel.fun = function(x,y){
+            xlim = get.cell.meta.data("xlim")
+            ylim = get.cell.meta.data("ylim")
+            sector.name = get.cell.meta.data("sector.index")
+            
+            if(sector.name %in% TFs){
+              circos.text(mean(xlim), mean(ylim)+2.5, sector.name, facing = "inside", niceFacing = T, cex = .9,
+                          col = "turquoise3", font = 2)
+            }else{
+              circos.text(mean(xlim), mean(ylim)+2.5, sector.name, facing = "inside", niceFacing = T, cex = .9)
+            }
+            
+          })
+          # add links
+          for(i in 1:nrow(fromto)) {
+            g <- circos.link(sector.index1 =  as.character(fromto[i,1]), c(0.45, 0.55),
+                             sector.index2 =  as.character(fromto[i,2]), c(.92),
+                             col = as.character(fromto[i,4]),
+                             directional = 1,
+                             arr.width = .1,
+                             arr.length = .1)
+            
+          
+            
+          }
+          title(main_title)
+          circos.clear() 
+}
+
+  dev.off()
+  dflist[["plot"]] <- g 
+  return(dflist)
+}
+```
+
 # 1. Data
 ## 1.1. sample table
 
@@ -578,4 +1072,14 @@ list_de_urban_diet_014_symbol.diet_SYMBOL <- list(up = res_deseq_lfc_urban_diet_
 
 
 GO_model_0vs14 <- DEGO(input = list(urban = list_de_urban_diet_014_symbol.diet_SYMBOL), p.cutoff = 0.05, show_cat = 50)
+```
+
+# 11. TF enrichment
+ prediction of TF targets
+```{r}
+dir <- getwd()
+
+up_urban_014_TFup <- TF_overrep(input = "", inputdata = list_de_urban_diet_014_symbol.diet_SYMBOL$up)
+
+plot_TF_enrichment(overrep_results = up_urban_014_TFup, colorup = "tomato3", colordn = "cornflowerblue", input = "", source =  list_de_urban_diet_014_symbol.diet_SYMBOL$up, main_title = "list_de_urban_diet_014_symbol.diet_SYMBOL up")
 ```

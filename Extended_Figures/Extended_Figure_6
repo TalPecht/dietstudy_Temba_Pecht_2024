@@ -1,0 +1,240 @@
+---
+title: "300 TZ vadliation for Intervention study"
+author: "TP"
+date: "2024-07-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 0. preperation
+
+## packages
+```{r}
+library(variancePartition)
+library(stringr)
+library("rstatix")
+library("ggpubr")
+library(naniar)
+library("ggplot2")
+library("dplyr")
+library("ggpubr")
+library(xlsx)
+library(reshape2)
+library(dplyr)
+```
+
+
+
+# 1. Load data
+## 300 TZ
+### Metadata
+```{r}
+sample_table_300tz <- read.delim("./Data/240704_300tz_metadata_2.txt",sep = "\t")
+rownames(sample_table_300tz) <- sample_table_300tz$PID
+head(sample_table_300tz)
+```
+```{r}
+colnames(sample_table_300tz)
+```
+add BMI
+```{r}
+sample_table_300tz$BMI <- sample_table_300tz$weight/(sample_table_300tz$height/100)^2
+
+plot(density(sample_table_300tz$BMI))
+```
+
+
+```{r}
+sapply(sample_table_300tz, class)
+```
+
+```{r}
+dim(sample_table_300tz)
+```
+```{r}
+vis_miss(sample_table_300tz)
+```
+remove rows with no PID
+```{r}
+sample_table_300tz <- subset(sample_table_300tz, PID !="")
+
+dim(sample_table_300tz)
+```
+
+
+
+### olink data
+```{r}
+olink_300tz <- read.csv("./Data/Olink_Inflammation_300TZ_QCed_72Proteins_318samples.csv",row.names = 1)
+
+head(olink_300tz)
+```
+```{r}
+dim(olink_300tz)
+```
+```{r}
+all(sapply(olink_300tz, is.numeric))
+```
+
+```{r}
+vis_miss(olink_300tz)
+```
+
+### clusters from nadira
+```{r}
+clusters_nadira <- read.csv("./Data//300TZ_2_Cluster_from_food_metabolome.csv")
+rownames(clusters_nadira) <- clusters_nadira$PID
+
+head(clusters_nadira)
+```
+
+
+# 2. Cluster comparisons
+
+
+#### ... dream analysis
+```{r}
+myinfo <- merge(sample_table_300tz, clusters_nadira, by= "PID", all.x = F, all.y = T)
+rownames(myinfo) <- myinfo$PID
+rownames(myinfo)
+```
+
+```{r}
+mydata <- t(olink_300tz)
+
+ids_to_use <- intersect(colnames(mydata), rownames(myinfo))
+
+mydata <- mydata[,match(ids_to_use,colnames(mydata))]
+myinfo <- myinfo[match(ids_to_use, rownames(myinfo)),]
+  
+identical(rownames(myinfo), colnames(mydata))
+
+```
+```{r}
+  
+myinfo$Cluster <- factor(myinfo$Cluster, levels = c("cluster1","cluster2"))
+
+unique(myinfo$Cluster)
+```
+```{r}
+mycontrasts <- c(
+    cluster1_vs_cluster2 = "Clustercluster1 - Clustercluster2"
+  )
+  
+  
+  L <- makeContrastsDream(~ 0 + Cluster + BMI + age + sex , myinfo,
+  contrasts = mycontrasts
+)
+
+# Visualize contrast matrix
+plotContrasts(L)
+```
+
+```{r}
+fitmm_dream <- dream(mydata, ~ 0 + Cluster + BMI + age + sex , myinfo, L)
+
+fitmm_dream <- eBayes(fitmm_dream)
+
+dream_res <- variancePartition::topTable(fitmm_dream, coef = "cluster1_vs_cluster2", number = Inf, adjust.method = "BH", sort.by = "p", lfc = 0)
+
+dream_res$protein <- rownames(dream_res)
+
+print(nrow(dream_res[dream_res$adj.P.Val <=0.05,]))
+
+print(dream_res[dream_res$adj.P.Val <=0.05,c("logFC", "protein")])
+```
+
+plot in cluster 1 vs 2
+```{r}
+sig_olink_clusters <- as.character(dream_res[dream_res$adj.P.Val <=0.05,"protein"])
+
+sig_olink_clusters
+```
+```{r}
+olink_res_clusters <- as.data.frame(t(mydata[sig_olink_clusters,]))
+olink_res_clusters$PID <- rownames(olink_res_clusters)
+
+olink_res_clusters <- reshape2::melt(olink_res_clusters)
+
+head(olink_res_clusters)
+```
+```{r}
+olink_res_clusters <- merge(olink_res_clusters, myinfo, by = "PID", all.x = T, all.y = F)
+
+head(olink_res_clusters)
+```
+```{r}
+ggplot(olink_res_clusters, aes(x= Cluster, y= value))+
+  geom_violin(aes(fill = Cluster))+
+  geom_boxplot(fill="white", width = 0.1, outlier.shape = NA)+
+  geom_jitter(alpha = 0.2, width = 0.2, size = 0.1)+
+  facet_wrap(.~variable, scales = "free_y")+
+  scale_x_discrete(labels = c("TD","WD"))+
+  scale_fill_manual(values = c("cluster1" = "#008080", "cluster2" = "#8b0000"))+
+  theme_bw()
+  
+```
+#### ... compare to intervention
+```{r}
+olink_intervention <- read.csv("./Data/240912_olink_intervention_res_dream_all_sig.csv", row.names = 1)
+
+head(olink_intervention)
+```
+```{r}
+olink_intervention_TD <- subset(olink_intervention, diet == "rural_diet")
+
+## simplify names
+sig_olink_clusters_simple <- gsub("[[:punct:]]", "", sig_olink_clusters)
+## replace X4EBP1 with 4EBP1
+sig_olink_clusters_simple[which(sig_olink_clusters_simple == "X4EBP1")] <- "4EBP1"
+
+
+olink_intervention_TD$tz300 <- ifelse(olink_intervention_TD$protein_simple %in% sig_olink_clusters_simple, "validated","ns")
+
+ggplot(olink_intervention_TD, aes(x= comparison, fill = tz300))+
+  geom_bar(stat = "count", color = "black")
+```
+```{r fig.height=8}
+olink_intervention_TD$tz300 <- factor(olink_intervention_TD$tz300, levels = c("validated","ns"))
+
+olink_intervention_TD <- olink_intervention_TD[order(olink_intervention_TD$tz300, decreasing = T),]
+
+olink_intervention_TD$comparison <- factor(olink_intervention_TD$comparison, levels = c("t0_vs_t1","t1_vs_t2","t0_vs_t2"))
+
+ggplot(olink_intervention_TD, aes(x= comparison , y= reorder(protein, as.numeric(tz300)), fill = tz300))+
+  geom_point(aes(shape = regulation), size = 2)+
+  scale_shape_manual(values = c("up" = 24, "down" = 25))+
+  scale_fill_manual(values = c("validated" = "black", "ns" = "gold"))+
+  theme_bw()+
+  theme(aspect.ratio = 3, axis.title = element_blank())
+```
+```{r}
+olink_tz_validated <- data.frame(tz300 = sig_olink_clusters_simple)
+
+olink_tz_validated$intervention <- ifelse(olink_tz_validated$tz300 %in% olink_intervention_TD$protein_simple,"intevention","ns")
+
+ggplot(olink_tz_validated, aes(x= tz300, y = "",fill = intervention))+
+  geom_point(shape = 21, size = 6)+
+  scale_fill_manual(values = c("intevention" = "#0564ad", "ns" = "white"))+
+  theme_bw()+
+  theme(aspect.ratio = 0.1, axis.text.x = element_text(angle = 40, 
+                                                       vjust = 1, hjust = 1), 
+        axis.text.y = element_blank(), axis.title = element_blank())
+  
+```
+
+
+
+
+
+
+
+# 3. Session Info
+
+```{r}
+sessionInfo()
+```
+

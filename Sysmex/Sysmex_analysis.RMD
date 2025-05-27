@@ -206,6 +206,7 @@ for(i in  colnames(L)){
 head(dream_urbandiet_diet)
 ```
 #### ... add paired log2FC
+calculate the log2FC2 values for later timepoint vs early point for visualization
 ```{r}
 identical(rownames(info_urbandiet_diet), rownames(sysmex_urbandiet_diet_infl_log))
 ```
@@ -247,6 +248,7 @@ head(pairedFC_urbandiet_diet)
 
 ```{r}
 ### add paired FC
+calculate the log2FC2 values for later timepoint vs early point for visualization
 pairedFC_urbandiet_diet$merged <- paste0(pairedFC_urbandiet_diet$variable,"_", pairedFC_urbandiet_diet$comparison)
 
 dream_urbandiet_diet$merged <- paste0(dream_urbandiet_diet$variable,"_", dream_urbandiet_diet$comparison)
@@ -385,6 +387,7 @@ for(i in  colnames(L)){
 head(dream_urbandiet_ctr)
 ```
 #### ... add paired log2FC
+calculate the log2FC2 values for later timepoint vs early point for visualization
 ```{r}
 identical(rownames(info_urbandiet_ctr), rownames(sysmex_urbandiet_ctr_infl_log))
 ```
@@ -426,6 +429,7 @@ head(pairedFC_urbandiet_ctr)
 
 ```{r}
 ### add paired FC
+## calculate the log2FC2 values for later timepoint vs early point for visualization
 pairedFC_urbandiet_ctr$merged <- paste0(pairedFC_urbandiet_ctr$variable,"_", pairedFC_urbandiet_ctr$comparison)
 
 dream_urbandiet_ctr$merged <- paste0(dream_urbandiet_ctr$variable,"_", dream_urbandiet_ctr$comparison)
@@ -568,6 +572,7 @@ for(i in  colnames(L)){
 head(dream_ruraldiet_diet)
 ```
 #### ... add paired log2FC
+calculate the log2FC2 values for later timepoint vs early point for visualization
 ```{r}
 identical(rownames(info_ruraldiet_diet), rownames(sysmex_ruraldiet_diet_infl_log))
 ```
@@ -749,6 +754,7 @@ for(i in  colnames(L)){
 head(dream_ruraldiet_ctr)
 ```
 #### ... add paired log2FC
+calculate the log2FC2 values for later timepoint vs early point for visualization
 ```{r}
 identical(rownames(info_ruraldiet_contol), rownames(sysmex_ruraldiet_ctr_infl_log))
 ```

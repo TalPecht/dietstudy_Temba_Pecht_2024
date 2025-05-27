@@ -185,6 +185,7 @@ head(dream_urbandiet_diet)
 ```
 
 ### Step 3: add paired log2FC
+calculate the log2FC2 values for later timepoint vs early point for visualization
 ```{r}
 identical(rownames(sample_table_urbandiet), rownames(data_log_urbandiet))
 ```
@@ -489,6 +490,7 @@ head(dream_ruraldiet_diet)
 ```
 
 ### Step 3: add paired log2FC
+calculate the log2FC2 values for later timepoint vs early point for visualization
 ```{r}
 identical(rownames(sample_table_ruraldiet), rownames(data_log_ruraldiet))
 ```
@@ -791,6 +793,7 @@ head(dream_mbegediet_diet)
 ```
 
 ### Step 3: add paired log2FC
+calculate the log2FC2 values for later timepoint vs early point for visualization
 ```{r}
 identical(rownames(sample_table_mbegediet), rownames(data_log_mbegediet))
 ```
@@ -1095,6 +1098,7 @@ head(dream_urbandiet_ctr)
 ```
 
 ### Step 3: add paired log2FC
+calculate the log2FC2 values for later timepoint vs early point for visualization
 ```{r}
 identical(rownames(sample_table_urbandiet_ctr), rownames(data_log_urbandiet_ctr))
 ```
@@ -1377,6 +1381,7 @@ head(dream_ruraldiet_ctr)
 ```
 
 ### Step 3: add paired log2FC
+calculate the log2FC2 values for later timepoint vs early point for visualization
 ```{r}
 identical(rownames(sample_table_ruraldiet_ctr), rownames(data_log_ruraldiet_ctr))
 ```

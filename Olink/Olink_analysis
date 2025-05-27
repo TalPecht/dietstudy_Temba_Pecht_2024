@@ -764,6 +764,7 @@ res_dream_urbandiet <- as.data.frame(res_dream_urbandiet %>% add_significance(p.
 ```
 
 ### step5: calculate paire fc
+calculate the log2FC2 values for later timepoint vs early point for visualization
 
 ```{r}
 pairedFC_urbandiet_diet <- data.frame()
@@ -1166,6 +1167,7 @@ res_dream_ruraldiet <- as.data.frame(res_dream_ruraldiet %>% add_significance(p.
 ```
 
 ### step5: calculate paire fc
+calculate the log2FC2 values for later timepoint vs early point for visualization
 
 ```{r}
 pairedFC_ruraldiet_diet <- data.frame()
@@ -1580,6 +1582,7 @@ res_dream_mbege <- as.data.frame(res_dream_mbege %>% add_significance(p.col = "a
 ```
 
 ### step5: calculate paire fc
+calculate the log2FC2 values for later timepoint vs early point for visualization
 
 ```{r}
 pairedFC_mbege <- data.frame()
@@ -2815,6 +2818,7 @@ res_dream_ruraldiet_ctr <- as.data.frame(res_dream_ruraldiet_ctr %>% add_signifi
 ```
 
 ### step5: calculate paire fc
+calculate the log2FC2 values for later timepoint vs early point for visualization
 
 ```{r}
 pairedFC_ruraldiet_ctr <- data.frame()
@@ -3247,6 +3251,7 @@ res_dream_urbandiet_ctr <- as.data.frame(res_dream_urbandiet_ctr %>% add_signifi
 ```
 
 ### step5: calculate paire fc
+calculate the log2FC2 values for later timepoint vs early point for visualization
 
 ```{r}
 pairedFC_urbandiet_ctr <- data.frame()
